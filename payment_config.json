@@ -1,0 +1,12 @@
+{
+  "bharatpe": {
+    "enabled": false,
+    "merchant_id": "",
+    "access_token": "",
+    "session_cookie": ""
+  },
+  "upiexpress": {
+    "enabled": true,
+    "api_key": "KaHO7yspVx1NmkOpI254xhfWVzxjkQbUY20D"
+  }
+}
