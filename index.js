@@ -308,7 +308,8 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
     const logInfo = logStmt.run(scheduleId, userId || null, displayName, meetingName || '', url, startedAt);
     const logId = logInfo.lastInsertRowid;
 
-    const pythonProcess = spawn('python3', [
+    const pythonExecutable = process.env.PYTHON_PATH || 'python3';
+    const pythonProcess = spawn(pythonExecutable, [
         autojoinPath,
         '--url', url,
         '--name', displayName,
