@@ -36,7 +36,8 @@ def log(msg):
 def screenshot(driver, name="screenshot"):
     try:
         ts = str(int(time.time()))
-        path = os.path.join(SCREENSHOTS_DIR, name + "_" + ts + ".png")
+        pid = str(os.getpid())
+        path = os.path.join(SCREENSHOTS_DIR, f"{name}_{pid}_{ts}.png")
         driver.save_screenshot(path)
         log("Screenshot saved: " + path)
     except Exception as e:
@@ -245,7 +246,8 @@ try:
             connected = True
             # Auto-screenshot to confirm join
             ts = str(int(time.time()))
-            auto_ss_path = os.path.join(SCREENSHOTS_DIR, "joined_" + ts + ".png")
+            pid = str(os.getpid())
+            auto_ss_path = os.path.join(SCREENSHOTS_DIR, f"joined_{pid}_{ts}.png")
             try:
                 driver.save_screenshot(auto_ss_path)
                 log("Auto-screenshot saved on join: " + auto_ss_path)
@@ -294,6 +296,7 @@ try:
 
     # 9. Leave
     log("Leaving meeting...")
+    left = False
     try:
         leave_btn = WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '#hangup-button, [data-tid="hangup-button"], button[aria-label="Leave"], button[data-tid="call-hangup"]'))
@@ -301,6 +304,7 @@ try:
         log("Found leave button, forcing click via JS...")
         driver.execute_script("arguments[0].click();", leave_btn)
         time.sleep(2)
+        left = True
     except Exception:
         log("Could not find specific leave button, trying fallback...")
         left = try_click(driver, [
