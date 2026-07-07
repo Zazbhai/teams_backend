@@ -195,8 +195,24 @@ try:
     log("Polling every 5s for hangup button / participant badge (confirms join accepted)...")
     connected = False
     deadline = time.time() + 120
+    cmd_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cmd_" + str(os.getpid()) + ".txt")
 
     while time.time() < deadline:
+        # Check for LEAVE command even while in lobby
+        if os.path.exists(cmd_file):
+            try:
+                with open(cmd_file, "r") as f:
+                    cmd = f.read().strip()
+                os.remove(cmd_file)
+                if cmd.split()[0] == "LEAVE":
+                    log("Received LEAVE command while in lobby — closing browser immediately.")
+                    connected = False
+                    raise SystemExit(0)
+            except SystemExit:
+                raise
+            except Exception as e:
+                log("Error reading command file in lobby: " + str(e))
+
         detected = False
 
         # Check for hangup button (strongest signal: we are IN the meeting)
@@ -250,6 +266,7 @@ try:
             pass
 
         time.sleep(5)  # Poll every 5 seconds
+
 
     if not connected:
         screenshot(driver, "stuck_state")
