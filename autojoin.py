@@ -25,6 +25,9 @@ parser.add_argument("--headless", action="store_true",      help="Run Chrome hea
 args = parser.parse_args()
 
 LOG_PREFIX = "[" + args.name + "]"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCREENSHOTS_DIR = os.path.join(SCRIPT_DIR, "screenshots")
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
@@ -32,11 +35,12 @@ def log(msg):
 
 def screenshot(driver, name="screenshot"):
     try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name + "_" + str(int(time.time())) + ".png")
+        ts = str(int(time.time()))
+        path = os.path.join(SCREENSHOTS_DIR, name + "_" + ts + ".png")
         driver.save_screenshot(path)
         log("Screenshot saved: " + path)
-    except Exception:
-        pass
+    except Exception as e:
+        log("Screenshot failed: " + str(e))
 
 def try_click(driver, selectors, timeout=15, label="element"):
     """Try multiple (By, selector) pairs, click first that works."""
@@ -200,41 +204,68 @@ try:
         log("ERROR: Could not click Join Now")
         sys.exit(1)
 
-    # 7. Wait for connected / lobby
-    log("Waiting for connection...")
+    # 7. Wait for connected — poll every 5 seconds for hangup button or participant badge
+    log("Polling every 5s for hangup button / participant badge (confirms join accepted)...")
     connected = False
     deadline = time.time() + 120
 
     while time.time() < deadline:
+        detected = False
+
+        # Check for hangup button (strongest signal: we are IN the meeting)
         try:
-            badge = driver.find_element(By.CSS_SELECTOR, '[data-tid="toolbar-item-badge"]')
-            if badge:
-                log("Connected! Participants: " + badge.get_attribute("textContent").strip())
-                connected = True
-                break
+            hangup = driver.find_element(
+                By.CSS_SELECTOR,
+                '#hangup-button, [data-tid="hangup-button"], button[data-tid="call-hangup"], button[aria-label="Leave"]'
+            )
+            if hangup.is_displayed():
+                log("CONFIRMED: Hangup button visible — successfully joined meeting!")
+                detected = True
         except Exception:
             pass
 
+        # Also check for participant badge (secondary signal)
+        if not detected:
+            try:
+                badge = driver.find_element(By.CSS_SELECTOR, '[data-tid="toolbar-item-badge"]')
+                if badge:
+                    log("CONFIRMED: Participant badge visible — Participants: " + badge.get_attribute("textContent").strip())
+                    detected = True
+            except Exception:
+                pass
+
+        # Page source fallback
+        if not detected:
+            src = driver.page_source
+            if "hangup-button" in src or "call-hangup" in src or "toolbar-item-badge" in src:
+                log("CONFIRMED: Join detected via page source.")
+                detected = True
+
+        if detected:
+            connected = True
+            # Auto-screenshot to confirm join
+            ts = str(int(time.time()))
+            auto_ss_path = os.path.join(SCREENSHOTS_DIR, "joined_" + ts + ".png")
+            try:
+                driver.save_screenshot(auto_ss_path)
+                log("Auto-screenshot saved on join: " + auto_ss_path)
+            except Exception as e:
+                log("Auto-screenshot failed: " + str(e))
+            break
+
+        # Check for lobby
         try:
             el = driver.find_element(By.XPATH, "//*[contains(text(),'let you in')]")
             if el.is_displayed():
-                log("In lobby - waiting for host.")
-                connected = True
-                break
+                log("Still in lobby — waiting for host to accept...")
         except Exception:
             pass
 
-        src = driver.page_source
-        if "toolbar-item-badge" in src or "let you in" in src or "waiting to be admitted" in src:
-            log("Connected or in lobby (page source match)!")
-            connected = True
-            break
-
-        time.sleep(2)
+        time.sleep(5)  # Poll every 5 seconds
 
     if not connected:
         screenshot(driver, "stuck_state")
-        log("WARNING: Could not confirm join after 120s - staying for duration anyway.")
+        log("WARNING: Could not confirm join after 120s — staying for duration anyway.")
 
     # 8. Stay for duration or until LEAVE command
     log("Staying for " + str(args.duration) + " minutes...")
