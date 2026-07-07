@@ -14,8 +14,12 @@ const fs = require('fs');
 const cron = require('node-cron');
 const { spawn } = require('child_process');
 const path = require('path');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 8000;
 
 // Setup CORS
@@ -337,7 +341,23 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
     }
 
     pythonProcess.stdout.on('data', (data) => {
-        console.log(`[${displayName}/${meetingName}]: ${data.toString().trim()}`);
+        const lines = data.toString().trim().split('\n');
+        for (const line of lines) {
+            console.log(`[${displayName}/${meetingName}]: ${line}`);
+            if (line.includes('Opening:')) {
+                io.emit('step_update', { scheduleId, step: 0 });
+            } else if (line.includes('Turning off camera')) {
+                io.emit('step_update', { scheduleId, step: 1 });
+            } else if (line.includes('Selecting no audio')) {
+                io.emit('step_update', { scheduleId, step: 2 });
+            } else if (line.includes('Looking for name input') || line.includes('Entered name:')) {
+                io.emit('step_update', { scheduleId, step: 3 });
+            } else if (line.includes('Clicking Join Now') || line.includes('lobby - waiting')) {
+                io.emit('step_update', { scheduleId, step: 4 });
+            } else if (line.includes('CONFIRMED:')) {
+                io.emit('step_update', { scheduleId, step: 5 });
+            }
+        }
     });
 
     pythonProcess.stderr.on('data', (data) => {
@@ -900,6 +920,6 @@ app.delete('/api/subscriptions/:id', (req, res) => {
 });
 
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`Teams AutoPilot backend listening at http://localhost:${PORT}`);
 });
