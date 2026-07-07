@@ -734,8 +734,37 @@ app.post('/settings/template', (req, res) => {
     if (end_day !== undefined) stmt.run('template_end_day', end_day, end_day);
     if (start_time !== undefined) stmt.run('template_start_time', start_time, start_time);
     if (end_time !== undefined) stmt.run('template_end_time', end_time, end_time);
+
+    // If URL or times changed, patch TODAY's schedules only (not future days)
+    const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+    if (url !== undefined || start_time !== undefined || end_time !== undefined) {
+        const todaySchedules = db.prepare("SELECT * FROM schedules WHERE day = ?").all(todayName);
+        todaySchedules.forEach(s => {
+            if (url !== undefined && url !== '') {
+                db.prepare("UPDATE schedules SET url = ? WHERE id = ?").run(url, s.id);
+                // Reschedule the cron job with new URL
+                if (activeCronJobs[s.id]) {
+                    activeCronJobs[s.id].stop();
+                    delete activeCronJobs[s.id];
+                }
+                scheduleMeetingJob(s.id, start_time || s.start_time, end_time || s.end_time, s.day, url, s.team_name, s.meeting_name, s.user_id);
+            }
+            if ((start_time !== undefined || end_time !== undefined) && url === undefined) {
+                const newStart = start_time || s.start_time;
+                const newEnd = end_time || s.end_time;
+                db.prepare("UPDATE schedules SET start_time = ?, end_time = ? WHERE id = ?").run(newStart, newEnd, s.id);
+                if (activeCronJobs[s.id]) {
+                    activeCronJobs[s.id].stop();
+                    delete activeCronJobs[s.id];
+                }
+                scheduleMeetingJob(s.id, newStart, newEnd, s.day, s.url, s.team_name, s.meeting_name, s.user_id);
+            }
+        });
+    }
+
     res.json({ message: "Template settings updated successfully" });
 });
+
 
 app.put('/users/:id/template_permission', (req, res) => {
     if (!req.user || req.user.role !== 'admin') return res.status(403).json({ detail: "Forbidden" });
