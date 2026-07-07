@@ -280,38 +280,7 @@ try:
                 log("Error reading command file: " + str(e))
         time.sleep(1)
 
-    # 9. Leave
-    log("Leaving meeting...")
-    left = False
-    try:
-        leave_btn = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '#hangup-button, [data-tid="hangup-button"], button[aria-label="Leave"], button[data-tid="call-hangup"]'))
-        )
-        log("Found leave button, forcing click via JS...")
-        driver.execute_script("arguments[0].click();", leave_btn)
-        time.sleep(2)
-        left = True
-    except Exception:
-        log("Could not find specific leave button, trying fallback...")
-        left = try_click(driver, [
-            (By.ID,           "hangup-button"),
-            (By.CSS_SELECTOR, 'button[data-tid="hangup-button"]'),
-            (By.CSS_SELECTOR, '[data-tid="hangup-button"]'),
-            (By.XPATH,        '//button[@aria-label="Leave"]'),
-            (By.XPATH,        '//button[contains(@aria-label,"leave")]'),
-            (By.XPATH,        '//button[contains(@aria-label,"Leave")]'),
-            (By.XPATH,        '//button[contains(text(),"Leave")]'),
-            (By.XPATH,        '//div[contains(@aria-label,"Leave")]'),
-            (By.XPATH,        '//div[contains(@aria-label,"leave")]'),
-        (By.CSS_SELECTOR, 'button[id*="hangup"]'),
-    ], timeout=10, label="Leave")
-
-    if left:
-        log("Left meeting successfully.")
-    else:
-        log("Could not find Leave button - closing browser.")
-
-    time.sleep(2)
+    log("Meeting duration ended or LEAVE command received. Closing browser...")
 
 except KeyboardInterrupt:
     log("Interrupted - leaving meeting.")
