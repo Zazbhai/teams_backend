@@ -422,12 +422,31 @@ app.get('/users/me', (req, res) => {
 app.get('/automations/logs/my', (req, res) => {
     if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
     const rows = db.prepare(`
-        SELECT id, meeting_name, url, status, started_at, ended_at, user_name as team_name
+        SELECT id, meeting_name, url, status, started_at, ended_at, user_name as team_name, pid
         FROM automation_logs 
         WHERE user_id = ? 
         ORDER BY started_at DESC
     `).all(req.user.id);
-    res.json(rows);
+
+    const screenshotsDir = path.join(__dirname, 'screenshots');
+    let allScreenshots = [];
+    try {
+        if (fs.existsSync(screenshotsDir)) {
+            allScreenshots = fs.readdirSync(screenshotsDir);
+        }
+    } catch (e) {
+        console.error("Error reading screenshots dir", e);
+    }
+
+    const enhancedRows = rows.map(row => {
+        const pidStr = `_${row.pid}_`;
+        const myScreenshots = allScreenshots
+            .filter(f => f.includes(pidStr))
+            .map(f => `/screenshots/${f}`);
+        return { ...row, screenshots: myScreenshots };
+    });
+
+    res.json(enhancedRows);
 });
 
 app.get('/schedules', (req, res) => {
@@ -509,6 +528,33 @@ app.post('/schedules', (req, res) => {
     
     res.json({ id: info.lastInsertRowid, message: "Scheduled successfully" });
 });
+
+app.put('/schedules/:id', authenticateToken, (req, res) => {
+    const id = req.params.id;
+    const { team_name, meeting_name, url, start_time, end_time, day } = req.body;
+    
+    // Update db
+    const stmt = db.prepare(
+        "UPDATE schedules SET team_name = ?, meeting_name = ?, url = ?, start_time = ?, end_time = ?, day = ? WHERE id = ? AND user_id = ?"
+    );
+    const info = stmt.run(team_name, meeting_name, url, start_time, end_time, day, id, req.user.id);
+    
+    if (info.changes === 0) {
+        return res.status(404).json({ detail: "Schedule not found or not authorized" });
+    }
+    
+    // Stop old cron job
+    if (activeCronJobs[id]) {
+        activeCronJobs[id].stop();
+        delete activeCronJobs[id];
+    }
+    
+    // Start new cron job
+    scheduleMeetingJob(id, start_time, end_time, day, url, team_name, meeting_name, req.user.id);
+    
+    res.json({ message: "Schedule updated successfully" });
+});
+
 
 app.delete('/schedules/:id', (req, res) => {
     const id = req.params.id;
