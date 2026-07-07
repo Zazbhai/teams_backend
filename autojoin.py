@@ -122,20 +122,6 @@ try:
         pass
     time.sleep(1)
 
-    # 2. Continue on this browser
-    log("Looking for 'Continue on this browser' button...")
-    clicked = try_click(driver, [
-        (By.CSS_SELECTOR, 'button[data-tid="joinOnWeb"]'),
-        (By.XPATH,        '//button[contains(text(),"Continue on this browser")]'),
-        (By.XPATH,        '//button[contains(text(),"Join on the web instead")]'),
-        (By.XPATH,        '//a[contains(text(),"Continue on this browser")]'),
-        (By.XPATH,        '//span[contains(text(),"Continue on this browser")]'),
-    ], timeout=30, label="joinOnWeb")
-
-    if not clicked:
-        screenshot(driver, "no_join_web_btn")
-
-    time.sleep(2)
 
     # 3. Name input
     log("Looking for name input...")
