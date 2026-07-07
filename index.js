@@ -344,18 +344,26 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
         const lines = data.toString().trim().split('\n');
         for (const line of lines) {
             console.log(`[${displayName}/${meetingName}]: ${line}`);
+            let step = null;
             if (line.includes('Opening:')) {
-                io.emit('step_update', { scheduleId, step: 0 });
+                step = 0;
             } else if (line.includes('Turning off camera')) {
-                io.emit('step_update', { scheduleId, step: 1 });
+                step = 1;
             } else if (line.includes('Selecting no audio')) {
-                io.emit('step_update', { scheduleId, step: 2 });
+                step = 2;
             } else if (line.includes('Looking for name input') || line.includes('Entered name:')) {
-                io.emit('step_update', { scheduleId, step: 3 });
-            } else if (line.includes('Clicking Join Now') || line.includes('lobby - waiting')) {
-                io.emit('step_update', { scheduleId, step: 4 });
+                step = 3;
+            } else if (line.includes('Clicking Join Now') || line.includes('lobby - waiting') || line.includes('Still in lobby')) {
+                step = 4;
             } else if (line.includes('CONFIRMED:')) {
-                io.emit('step_update', { scheduleId, step: 5 });
+                step = 5;
+            }
+            if (step !== null) {
+                // Persist step on the process so API can return it on reconnect/refresh
+                if (activeProcesses[scheduleId]) {
+                    activeProcesses[scheduleId].currentStep = step;
+                }
+                io.emit('step_update', { scheduleId, step });
             }
         }
     });
@@ -609,9 +617,11 @@ app.get('/automations/active', (req, res) => {
             meeting_name: info.meetingName,
             url: info.url,
             started_at: info.startedAt,
+            current_step: info.currentStep ?? 0,  // last known step — persists across reconnects
         }));
     res.json({ count: active.length, instances: active });
 });
+
 
 // POST /automations/active/:id/leave — send LEAVE command
 app.post('/automations/active/:id/leave', (req, res) => {
