@@ -297,7 +297,7 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
     const displayName = teamName || 'AutoPilot Team';
     console.log(`[Automation] Starting: "${meetingName}" for ${displayName} (${duration} mins) => ${url}`);
     
-    const autojoinPath = path.join(__dirname, '..', 'autojoin.py');
+    const autojoinPath = path.join(__dirname, 'autojoin.py');
     const startedAt = new Date().toISOString();
 
     // Insert log entry
