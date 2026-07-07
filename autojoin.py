@@ -280,7 +280,35 @@ try:
                 log("Error reading command file: " + str(e))
         time.sleep(1)
 
-    log("Meeting duration ended or LEAVE command received. Closing browser...")
+    # 9. Leave
+    if connected:
+        log("Meeting joined — pressing hangup button before closing...")
+        try:
+            leave_btn = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR,
+                    '#hangup-button, [data-tid="hangup-button"], button[aria-label="Leave"], button[data-tid="call-hangup"]'))
+            )
+            driver.execute_script("arguments[0].click();", leave_btn)
+            log("Hangup button clicked successfully.")
+            time.sleep(2)
+        except Exception:
+            # Fallback: try common selectors
+            clicked = try_click(driver, [
+                (By.ID,           "hangup-button"),
+                (By.CSS_SELECTOR, 'button[data-tid="hangup-button"]'),
+                (By.CSS_SELECTOR, '[data-tid="hangup-button"]'),
+                (By.XPATH,        '//button[@aria-label="Leave"]'),
+                (By.XPATH,        '//button[contains(@aria-label,"Leave")]'),
+            ], timeout=5, label="hangup fallback")
+            if clicked:
+                log("Hangup button clicked via fallback.")
+                time.sleep(2)
+            else:
+                log("Could not find hangup button — closing browser directly.")
+    else:
+        log("Meeting was never joined — closing browser directly.")
+
+
 
 except KeyboardInterrupt:
     log("Interrupted - leaving meeting.")
