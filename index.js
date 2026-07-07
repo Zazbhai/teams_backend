@@ -549,17 +549,21 @@ app.get('/automations/active', (req, res) => {
 
 // POST /automations/active/:id/leave — send LEAVE command
 app.post('/automations/active/:id/leave', (req, res) => {
+    // Try both string and numeric key lookups since IDs can be strings like "manual_..."
     const id = req.params.id;
-    const processInfo = activeProcesses[id];
+    const processInfo = activeProcesses[id] || activeProcesses[parseInt(id)];
     if (!processInfo) {
-        return res.status(404).json({ error: "Process not found" });
+        console.log(`[Leave] Process not found for id=${id}. Active keys:`, Object.keys(activeProcesses));
+        return res.status(404).json({ error: "Process not found", active_ids: Object.keys(activeProcesses) });
     }
     
-    const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.pid}.txt`);
+    const cmdFile = path.join(__dirname, `cmd_${processInfo.pid}.txt`);
     try {
         fs.writeFileSync(cmdFile, "LEAVE");
+        console.log(`[Leave] Wrote LEAVE command to ${cmdFile}`);
         res.json({ message: "Leave command sent successfully" });
     } catch (e) {
+        console.error(`[Leave] Failed to write cmd file:`, e.message);
         res.status(500).json({ error: e.message });
     }
 });
@@ -567,15 +571,16 @@ app.post('/automations/active/:id/leave', (req, res) => {
 // POST /automations/active/:id/screenshot — send SCREENSHOT command and wait for result
 app.post('/automations/active/:id/screenshot', async (req, res) => {
     const id = req.params.id;
-    const processInfo = activeProcesses[id];
+    const processInfo = activeProcesses[id] || activeProcesses[parseInt(id)];
     if (!processInfo) {
+        console.log(`[Screenshot] Process not found for id=${id}. Active keys:`, Object.keys(activeProcesses));
         return res.status(404).json({ error: "Process not found" });
     }
     
     const timestamp = Date.now();
     const filename = `screenshot_${processInfo.pid}_${timestamp}.png`;
     const filepath = path.join(__dirname, 'screenshots', filename);
-    const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.pid}.txt`);
+    const cmdFile = path.join(__dirname, `cmd_${processInfo.pid}.txt`);
     
     try {
         fs.writeFileSync(cmdFile, `SCREENSHOT ${filepath}`);
