@@ -610,7 +610,26 @@ app.get('/automations/logs', (req, res) => {
         ORDER BY started_at DESC
         LIMIT ?
     `).all(limit);
-    res.json(rows);
+    
+    const screenshotsDir = path.join(__dirname, 'screenshots');
+    let allScreenshots = [];
+    try {
+        if (fs.existsSync(screenshotsDir)) {
+            allScreenshots = fs.readdirSync(screenshotsDir);
+        }
+    } catch (e) {
+        console.error("Error reading screenshots dir", e);
+    }
+
+    const enhancedRows = rows.map(row => {
+        const pidStr = `_${row.pid}_`;
+        const myScreenshots = allScreenshots
+            .filter(f => f.includes(pidStr))
+            .map(f => `/screenshots/${f}`);
+        return { ...row, screenshots: myScreenshots };
+    });
+
+    res.json(enhancedRows);
 });
 
 app.get('/stats', (req, res) => {
