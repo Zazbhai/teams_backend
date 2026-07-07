@@ -658,22 +658,36 @@ app.post('/automations/active/:id/screenshot', async (req, res) => {
     const filepath = path.join(__dirname, 'screenshots', filename);
     const cmdFile = path.join(__dirname, `cmd_${processInfo.pid}.txt`);
     
+    // Ensure screenshots directory exists
+    const screenshotsDir = path.join(__dirname, 'screenshots');
+    if (!fs.existsSync(screenshotsDir)) {
+        fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+
     try {
         fs.writeFileSync(cmdFile, `SCREENSHOT ${filepath}`);
+        console.log(`[Screenshot] Wrote SCREENSHOT command to ${cmdFile}, waiting for ${filepath}`);
         
-        // Wait up to 10 seconds for the file to be created
+        // Wait up to 15 seconds for the file to be created
         let attempts = 0;
+        let responded = false;
         const checkInterval = setInterval(() => {
+            if (responded) return; // prevent double-response
             if (fs.existsSync(filepath)) {
+                responded = true;
                 clearInterval(checkInterval);
+                console.log(`[Screenshot] File created: ${filename}`);
                 res.json({ url: `/screenshots/${filename}` });
-            } else if (attempts >= 20) { // 20 * 500ms = 10s
+            } else if (attempts >= 30) { // 30 * 500ms = 15s
+                responded = true;
                 clearInterval(checkInterval);
-                res.status(504).json({ error: "Screenshot timeout" });
+                console.log(`[Screenshot] Timeout waiting for ${filename}`);
+                res.status(504).json({ error: "Screenshot timeout — Selenium may be busy or not in meeting" });
             }
             attempts++;
         }, 500);
     } catch (e) {
+        console.error(`[Screenshot] Error:`, e.message);
         res.status(500).json({ error: e.message });
     }
 });
