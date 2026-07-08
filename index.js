@@ -299,13 +299,13 @@ function getTodayIST() {
 }
 
 // Checks if a user is within their daily quota
-// Returns { allowed: boolean, limit: number, active_count: number, joins_today: number, remaining: number }
+// Returns { allowed: boolean, limit: number, active_count: number, joins_today: number, scheduled_count: number, remaining: number }
 function checkDailyQuota(userId) {
     const user = db.prepare("SELECT daily_meeting_limit FROM users WHERE id = ?").get(userId);
     const limit = (user && user.daily_meeting_limit) ? user.daily_meeting_limit : 0;
 
     if (limit === 0) {
-        return { allowed: true, limit: 0, active_count: 0, joins_today: 0, remaining: -1 };
+        return { allowed: true, limit: 0, active_count: 0, joins_today: 0, scheduled_count: 0, remaining: -1 };
     }
 
     // Count active (running/pending) automations for this user
@@ -319,11 +319,15 @@ function checkDailyQuota(userId) {
     ).get(userId, todayIST);
     const joinsToday = todayRow ? todayRow.c : 0;
 
-    const used = activeCount + joinsToday;
+    // Count pending scheduled automations in the queue
+    const schedulesRow = db.prepare("SELECT COUNT(*) as c FROM schedules WHERE user_id = ?").get(userId);
+    const scheduledCount = schedulesRow ? schedulesRow.c : 0;
+
+    const used = activeCount + joinsToday + scheduledCount;
     const remaining = Math.max(0, limit - used);
     const allowed = used < limit;
 
-    return { allowed, limit, active_count: activeCount, joins_today: joinsToday, remaining };
+    return { allowed, limit, active_count: activeCount, joins_today: joinsToday, scheduled_count: scheduledCount, remaining };
 }
 
 function calculateDuration(startTime, endTime) {
@@ -471,6 +475,36 @@ function scheduleMeetingJob(scheduleId, startTime, endTime, day, url, teamName, 
             const now = new Date().toISOString();
             logStmt.run(scheduleId, userId || null, teamName || 'AutoPilot Team', meetingName || '', '', now, now);
             return;
+        }
+
+        // Strict execution-time quota check
+        if (userId) {
+            const user = db.prepare("SELECT daily_meeting_limit FROM users WHERE id = ?").get(userId);
+            const limit = (user && user.daily_meeting_limit) ? user.daily_meeting_limit : 0;
+            if (limit > 0) {
+                const activeCount = Object.values(activeProcesses).filter(p => p.userId === userId).length;
+                const todayIST = getTodayIST();
+                const todayRow = db.prepare("SELECT COUNT(*) as c FROM automation_logs WHERE user_id = ? AND joined_date = ? AND status = 'completed'").get(userId, todayIST);
+                const joinsToday = todayRow ? todayRow.c : 0;
+                
+                if (joinsToday + activeCount >= limit) {
+                    console.log(`[Scheduler] Quota exceeded at execution time for user ${userId}. Skipping id=${scheduleId}.`);
+                    const logStmt = db.prepare(`
+                        INSERT INTO automation_logs (schedule_id, user_id, user_name, meeting_name, url, status, started_at, ended_at)
+                        VALUES (?, ?, ?, ?, ?, 'skipped (quota reached)', ?, ?)
+                    `);
+                    const now = new Date().toISOString();
+                    logStmt.run(scheduleId, userId, teamName || 'AutoPilot Team', meetingName || '', '', now, now);
+                    
+                    // Auto remove from DB
+                    db.prepare("DELETE FROM schedules WHERE id = ?").run(scheduleId);
+                    if (activeCronJobs[scheduleId]) {
+                        activeCronJobs[scheduleId].stop();
+                        delete activeCronJobs[scheduleId];
+                    }
+                    return;
+                }
+            }
         }
 
         runAutomation(scheduleId, finalUrl, duration, teamName, meetingName, userId);
