@@ -169,6 +169,20 @@ function initDb() {
         // column might already exist
     }
 
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN daily_meeting_limit INTEGER DEFAULT 0");
+        // 0 = unlimited, N = max N meeting joins per day
+    } catch (e) {
+        // column might already exist
+    }
+
+    try {
+        db.exec("ALTER TABLE automation_logs ADD COLUMN joined_date TEXT");
+        // Stores YYYY-MM-DD (IST) when status = 'completed', used for daily quota counting
+    } catch (e) {
+        // column might already exist
+    }
+
     db.exec(`
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -276,6 +290,42 @@ app.use(firebaseMiddleware);
 // Background Scheduling Logic
 const activeCronJobs = {};
 
+// Returns today's date in YYYY-MM-DD format in IST timezone
+function getTodayIST() {
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // UTC+5:30 in ms
+    const istDate = new Date(now.getTime() + istOffset);
+    return istDate.toISOString().slice(0, 10);
+}
+
+// Checks if a user is within their daily quota
+// Returns { allowed: boolean, limit: number, active_count: number, joins_today: number, remaining: number }
+function checkDailyQuota(userId) {
+    const user = db.prepare("SELECT daily_meeting_limit FROM users WHERE id = ?").get(userId);
+    const limit = (user && user.daily_meeting_limit) ? user.daily_meeting_limit : 0;
+
+    if (limit === 0) {
+        return { allowed: true, limit: 0, active_count: 0, joins_today: 0, remaining: -1 };
+    }
+
+    // Count active (running/pending) automations for this user
+    const activeCount = Object.values(activeProcesses)
+        .filter(p => p.userId === userId).length;
+
+    // Count today's successful joins (in IST)
+    const todayIST = getTodayIST();
+    const todayRow = db.prepare(
+        "SELECT COUNT(*) as c FROM automation_logs WHERE user_id = ? AND joined_date = ? AND status = 'completed'"
+    ).get(userId, todayIST);
+    const joinsToday = todayRow ? todayRow.c : 0;
+
+    const used = activeCount + joinsToday;
+    const remaining = Math.max(0, limit - used);
+    const allowed = used < limit;
+
+    return { allowed, limit, active_count: activeCount, joins_today: joinsToday, remaining };
+}
+
 function calculateDuration(startTime, endTime) {
     try {
         const [sHour, sMinute] = startTime.split(':').map(Number);
@@ -375,9 +425,12 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
     pythonProcess.on('close', (code) => {
         const endedAt = new Date().toISOString();
         const status = code === 0 ? 'completed' : 'failed';
-        db.prepare("UPDATE automation_logs SET status = ?, ended_at = ? WHERE id = ?").run(status, endedAt, logId);
+        // When bot successfully joins, record today's IST date for daily quota tracking
+        const joinedDate = code === 0 ? getTodayIST() : null;
+        db.prepare("UPDATE automation_logs SET status = ?, ended_at = ?, joined_date = ? WHERE id = ?")
+            .run(status, endedAt, joinedDate, logId);
         delete activeProcesses[scheduleId];
-        console.log(`[Automation] ${displayName}/${meetingName} ended with code ${code} (${status})`);
+        console.log(`[Automation] ${displayName}/${meetingName} ended with code ${code} (${status})${joinedDate ? ` — quota date: ${joinedDate}` : ''}`);
     });
 }
 
@@ -526,6 +579,17 @@ app.post('/automations/start', (req, res) => {
     if (!url) return res.status(400).json({ detail: "URL is required" });
 
     const userId = req.user.id;
+
+    // Daily quota check
+    const quota = checkDailyQuota(userId);
+    if (!quota.allowed) {
+        return res.status(429).json({
+            detail: `Daily meeting limit reached (${quota.joins_today} joined + ${quota.active_count} active = ${quota.limit} limit). Try again tomorrow.`,
+            quota_exceeded: true,
+            quota
+        });
+    }
+
     const userName = req.user.name || 'AutoPilot User';
     const mins = parseInt(duration) || 60; // Default to 60 minutes
     const tempId = `manual_${Date.now()}_${userId}`;
@@ -545,6 +609,17 @@ app.post('/schedules', (req, res) => {
 
     const { team_name, meeting_name, url, start_time, end_time, day } = req.body;
     const userId = req.user.id;
+
+    // Daily quota check — pending automations count toward the limit
+    const quota = checkDailyQuota(userId);
+    if (!quota.allowed) {
+        return res.status(429).json({
+            detail: `Daily meeting limit reached (${quota.joins_today} joined + ${quota.active_count} active = ${quota.limit} limit). Try again tomorrow.`,
+            quota_exceeded: true,
+            quota
+        });
+    }
+
     const userName = req.user.name || 'AutoPilot User';
 
     const stmt = db.prepare(
@@ -744,13 +819,55 @@ app.get('/stats', (req, res) => {
 });
 
 app.get('/users/recent', (req, res) => {
-    const rows = db.prepare("SELECT id, name, email, has_subscription, subscription_end_date, role, can_edit_template FROM users ORDER BY id DESC LIMIT 5").all();
+    const rows = db.prepare("SELECT id, name, email, has_subscription, subscription_end_date, role, can_edit_template, daily_meeting_limit FROM users ORDER BY id DESC LIMIT 5").all();
     res.json(rows);
 });
 
 app.get('/users', (req, res) => {
-    const rows = db.prepare("SELECT id, name, email, has_subscription, subscription_end_date, role, can_edit_template FROM users").all();
+    const rows = db.prepare("SELECT id, name, email, has_subscription, subscription_end_date, role, can_edit_template, daily_meeting_limit FROM users").all();
     res.json(rows);
+});
+
+// GET /users/stats — returns all users with their automation stats (for admin panel)
+app.get('/users/stats', (req, res) => {
+    const todayIST = getTodayIST();
+    const rows = db.prepare(`
+        SELECT
+            u.id, u.name, u.email, u.has_subscription, u.subscription_end_date,
+            u.role, u.can_edit_template, u.daily_meeting_limit,
+            COUNT(al.id) AS total_meetings,
+            SUM(CASE WHEN al.status = 'completed' THEN 1 ELSE 0 END) AS successful_meetings,
+            SUM(CASE WHEN al.status = 'failed' THEN 1 ELSE 0 END) AS failed_meetings,
+            SUM(CASE WHEN al.joined_date = ? THEN 1 ELSE 0 END) AS today_meetings
+        FROM users u
+        LEFT JOIN automation_logs al ON al.user_id = u.id
+        GROUP BY u.id
+        ORDER BY u.id DESC
+    `).all(todayIST);
+    res.json(rows);
+});
+
+// GET /users/me/quota — returns daily quota info for the current user
+app.get('/users/me/quota', (req, res) => {
+    if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+    const quota = checkDailyQuota(req.user.id);
+    res.json(quota);
+});
+
+// PUT /users/:id/daily_limit — admin sets per-user daily meeting limit
+app.put('/users/:id/daily_limit', (req, res) => {
+    if (!req.user || req.user.role !== 'admin') {
+        return res.status(403).json({ detail: "Admin access required" });
+    }
+    const id = req.params.id;
+    const limit = parseInt(req.body.daily_limit);
+    if (isNaN(limit) || limit < 0) {
+        return res.status(400).json({ detail: "daily_limit must be a non-negative integer (0 = unlimited)" });
+    }
+    const info = db.prepare("UPDATE users SET daily_meeting_limit = ? WHERE id = ?").run(limit, id);
+    if (info.changes === 0) return res.status(404).json({ detail: "User not found" });
+    console.log(`[Admin] Set daily_meeting_limit=${limit} for user id=${id}`);
+    res.json({ message: "Daily limit updated", daily_meeting_limit: limit });
 });
 
 app.post('/users', (req, res) => {
