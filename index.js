@@ -423,10 +423,13 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
     });
 
     pythonProcess.on('close', (code) => {
+        const info = activeProcesses[scheduleId] || {};
         const endedAt = new Date().toISOString();
-        const status = code === 0 ? 'completed' : 'failed';
-        // When bot successfully joins, record today's IST date for daily quota tracking
-        const joinedDate = code === 0 ? getTodayIST() : null;
+        let status = code === 0 ? 'completed' : 'failed';
+        if (info.leaveRequested && (info.currentStep || 0) < 5) {
+            status = 'cancelled';
+        }
+        const joinedDate = status === 'completed' ? getTodayIST() : null;
         db.prepare("UPDATE automation_logs SET status = ?, ended_at = ?, joined_date = ? WHERE id = ?")
             .run(status, endedAt, joinedDate, logId);
         delete activeProcesses[scheduleId];
@@ -505,7 +508,7 @@ app.get('/automations/logs/my', (req, res) => {
     const rows = db.prepare(`
         SELECT id, meeting_name, url, status, started_at, ended_at, user_name as team_name, pid
         FROM automation_logs 
-        WHERE user_id = ? 
+        WHERE user_id = ? AND status != 'cancelled'
         ORDER BY started_at DESC
     `).all(req.user.id);
 
@@ -709,6 +712,7 @@ app.post('/automations/active/:id/leave', (req, res) => {
     }
     
     const cmdFile = path.join(__dirname, `cmd_${processInfo.pid}.txt`);
+    processInfo.leaveRequested = true;
     try {
         fs.writeFileSync(cmdFile, "LEAVE");
         console.log(`[Leave] Wrote LEAVE command to ${cmdFile}`);
