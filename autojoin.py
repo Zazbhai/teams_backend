@@ -194,7 +194,7 @@ try:
     # 7. Wait for connected — poll every 5 seconds for hangup button or participant badge
     log("Polling every 5s for hangup button / participant badge (confirms join accepted)...")
     connected = False
-    deadline = time.time() + 120
+    deadline = time.time() + 300
     cmd_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cmd_" + str(os.getpid()) + ".txt")
 
     while time.time() < deadline:
@@ -270,7 +270,8 @@ try:
 
     if not connected:
         screenshot(driver, "stuck_state")
-        log("WARNING: Could not confirm join after 120s — staying for duration anyway.")
+        log("WARNING: Could not confirm join after 300s — host did not accept. Marking as CANCELLED.")
+        sys.exit(2)
 
     # 8. Stay for duration or until LEAVE command
     log("Staying for " + str(args.duration) + " minutes...")

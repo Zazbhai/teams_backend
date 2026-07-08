@@ -430,6 +430,9 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
         const info = activeProcesses[scheduleId] || {};
         const endedAt = new Date().toISOString();
         let status = code === 0 ? 'completed' : 'failed';
+        if (code === 2) {
+            status = 'cancelled';
+        }
         if (info.leaveRequested && (info.currentStep || 0) < 5) {
             status = 'cancelled';
         }
