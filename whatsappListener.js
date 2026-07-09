@@ -1,9 +1,15 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
+let client = null;
+
 function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
+    if (client) {
+        console.log('[WhatsApp] Bot is already running.');
+        return;
+    }
     console.log('[WhatsApp] Initializing WhatsApp bot...');
-    const client = new Client({
+    client = new Client({
         authStrategy: new LocalAuth({ dataPath: './whatsapp-session' }),
         puppeteer: {
             headless: true,
@@ -79,4 +85,14 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
     client.initialize();
 }
 
-module.exports = { setupWhatsAppBot };
+function stopWhatsAppBot() {
+    if (client) {
+        console.log('[WhatsApp] Stopping WhatsApp bot...');
+        client.destroy();
+        client = null;
+    } else {
+        console.log('[WhatsApp] Bot is not running.');
+    }
+}
+
+module.exports = { setupWhatsAppBot, stopWhatsAppBot };

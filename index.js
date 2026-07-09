@@ -16,7 +16,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
-const { setupWhatsAppBot } = require('./whatsappListener');
+const { setupWhatsAppBot, stopWhatsAppBot } = require('./whatsappListener');
 
 const app = express();
 const server = http.createServer(app);
@@ -243,6 +243,9 @@ function initDb() {
             value TEXT
         )
     `);
+
+    db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('whatsapp_start_time', '09:00')");
+    db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('whatsapp_end_time', '18:00')");
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS subscription_plans (
@@ -1110,8 +1113,8 @@ app.delete('/users/:id', (req, res) => {
 });
 
 app.get('/settings/template', (req, res) => {
-    const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time')").all();
-    const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40' };
+    const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time', 'whatsapp_start_time', 'whatsapp_end_time')").all();
+    const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40', whatsapp_start_time: '09:00', whatsapp_end_time: '18:00' };
     rows.forEach(r => settings[r.key] = r.value);
     res.json(settings);
 });
@@ -1121,13 +1124,15 @@ app.post('/settings/template', (req, res) => {
     if (req.user.can_edit_template !== 1 && req.user.role !== 'admin') {
         return res.status(403).json({ detail: "Forbidden" });
     }
-    const { url, start_day, end_day, start_time, end_time } = req.body;
+    const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time } = req.body;
     const stmt = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?");
     if (url !== undefined) stmt.run('template_url', url, url);
     if (start_day !== undefined) stmt.run('template_start_day', start_day, start_day);
     if (end_day !== undefined) stmt.run('template_end_day', end_day, end_day);
     if (start_time !== undefined) stmt.run('template_start_time', start_time, start_time);
     if (end_time !== undefined) stmt.run('template_end_time', end_time, end_time);
+    if (whatsapp_start_time !== undefined) stmt.run('whatsapp_start_time', whatsapp_start_time, whatsapp_start_time);
+    if (whatsapp_end_time !== undefined) stmt.run('whatsapp_end_time', whatsapp_end_time, whatsapp_end_time);
 
     // If template settings changed, apply template for today
     if (url !== undefined || start_time !== undefined || end_time !== undefined || start_day !== undefined || end_day !== undefined) {
@@ -1205,10 +1210,43 @@ app.delete('/api/subscriptions/:id', (req, res) => {
 server.listen(PORT, () => {
     console.log(`Teams AutoPilot backend listening at http://localhost:${PORT}`);
     
-    // Initialize WhatsApp link fetcher
-    try {
-        setupWhatsAppBot(db, applyTemplateForToday);
-    } catch (e) {
-        console.error("Error setting up WhatsApp bot:", e);
-    }
+    // Initialize WhatsApp link fetcher automation
+    cron.schedule('* * * * *', () => {
+        try {
+            const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('whatsapp_start_time', 'whatsapp_end_time')").all();
+            let startT = '09:00';
+            let endT = '18:00';
+            rows.forEach(r => {
+                if (r.key === 'whatsapp_start_time') startT = r.value;
+                if (r.key === 'whatsapp_end_time') endT = r.value;
+            });
+
+            const nowIST = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+            const currHour = nowIST.getHours();
+            const currMin = nowIST.getMinutes();
+            const currTotal = currHour * 60 + currMin;
+
+            const startParts = startT.split(':');
+            const endParts = endT.split(':');
+            const startTotal = parseInt(startParts[0], 10) * 60 + parseInt(startParts[1], 10);
+            const endTotal = parseInt(endParts[0], 10) * 60 + parseInt(endParts[1], 10);
+
+            // Determine if current time is within window. Handle overnight wraps (e.g. 22:00 to 06:00)
+            let isWithin = false;
+            if (startTotal <= endTotal) {
+                isWithin = (currTotal >= startTotal && currTotal < endTotal);
+            } else {
+                isWithin = (currTotal >= startTotal || currTotal < endTotal);
+            }
+
+            if (isWithin) {
+                setupWhatsAppBot(db, applyTemplateForToday);
+            } else {
+                stopWhatsAppBot();
+            }
+        } catch (e) {
+            console.error("Error managing WhatsApp bot schedule:", e);
+        }
+    }, { timezone: 'Asia/Kolkata' });
+
 });
