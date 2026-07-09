@@ -129,7 +129,7 @@ app.put('/api/users/me/auto_template', authenticateToken, (req, res) => {
         console.log(`[Users/Me] Updated auto_template prefs for user ${user.id}`);
         
         if (req.body.trigger_now === true && enabled === 1) {
-            applyTemplateForToday(user.id);
+            applyTemplateForAllDays(user.id);
         }
         
         res.json({ status: "success", enabled, template_team_name: teamName, template_meeting_name: meetingName });
@@ -1137,7 +1137,7 @@ app.post('/settings/template', (req, res) => {
 
     // If template settings changed, apply template for today
     if (url !== undefined || start_time !== undefined || end_time !== undefined || start_day !== undefined || end_day !== undefined) {
-        applyTemplateForToday();
+        applyTemplateForAllDays();
     }
 
     res.json({ message: "Template settings updated successfully" });
@@ -1241,7 +1241,7 @@ server.listen(PORT, () => {
             }
 
             if (isWithin) {
-                setupWhatsAppBot(db, applyTemplateForToday);
+                setupWhatsAppBot(db, applyTemplateForAllDays);
             } else {
                 stopWhatsAppBot();
             }
