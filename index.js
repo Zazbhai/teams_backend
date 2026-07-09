@@ -93,11 +93,40 @@ app.get('/api/users/me', authenticateToken, (req, res) => {
             subscription_end_date: user.subscription_end_date || null,
             plan_name: planName,
             role: user.role,
-            can_edit_template: user.can_edit_template === 1
+            can_edit_template: user.can_edit_template === 1,
+            auto_template_enabled: user.auto_template_enabled === 1
         };
         console.log('[Users/Me] Returning:', response);
         res.json(response);
     } catch (e) {
+        console.error('[Users/Me] Error:', e.message);
+        res.status(500).json({ detail: e.message });
+    }
+});
+
+app.put('/api/users/me/auto_template', authenticateToken, (req, res) => {
+    try {
+        const email = req.user.email;
+        if (!email) return res.status(400).json({ detail: "No email in token" });
+        
+        const user = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+        if (!user) return res.status(404).json({ detail: "User not found" });
+        
+        const enabled = req.body.enabled === true ? 1 : 0;
+        db.prepare("UPDATE users SET auto_template_enabled = ? WHERE id = ?").run(enabled, user.id);
+        
+        console.log(`[Users/Me] Updated auto_template_enabled to ${enabled} for user ${user.id}`);
+        
+        // We do NOT immediately trigger `applyTemplateForToday` here,
+        // because if they toggle it off, we'd need to delete their existing ones for today.
+        // Usually, disabling means they don't get them generated tomorrow, or they can delete manually.
+        
+        res.json({ status: "success", enabled });
+    } catch (e) {
+        console.error('[Users/Me/AutoTemplate] Error:', e.message);
+        res.status(500).json({ detail: e.message });
+    }
+});
         console.error("Error fetching user profile:", e);
         res.status(500).json({ detail: "Internal Server Error" });
     }
@@ -555,7 +584,8 @@ function applyTemplateForToday() {
     }
     
     if (isWithinDays) {
-        const users = db.prepare("SELECT id, name FROM users").all();
+        // Only select users who have the feature enabled
+        const users = db.prepare("SELECT id, name FROM users WHERE auto_template_enabled = 1").all();
         users.forEach(u => {
             const existing = db.prepare("SELECT * FROM schedules WHERE user_id = ? AND day = ? AND meeting_name = 'Premade Template'").get(u.id, todayName);
             if (existing) {
