@@ -129,7 +129,7 @@ app.put('/api/users/me/auto_template', authenticateToken, (req, res) => {
         console.log(`[Users/Me] Updated auto_template prefs for user ${user.id}`);
         
         if (req.body.trigger_now === true && enabled === 1) {
-            applyTemplateForToday();
+            applyTemplateForToday(user.id);
         }
         
         res.json({ status: "success", enabled, template_team_name: teamName, template_meeting_name: meetingName });
@@ -587,11 +587,23 @@ function loadJobsFromDb() {
 
 loadJobsFromDb();
 
-function applyTemplateForToday() {
+function applyTemplateForToday(targetUserId = null) {
     const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
     const settingsRows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time')").all();
     const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40' };
     settingsRows.forEach(r => settings[r.key] = r.value);
+    
+    // Check if end time is already passed today in IST
+    const endTimeParts = settings.template_end_time.split(':');
+    const nowIST = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+    const endHour = parseInt(endTimeParts[0], 10);
+    const endMin = parseInt(endTimeParts[1], 10);
+    const isPastEndTime = (nowIST.getHours() > endHour) || (nowIST.getHours() === endHour && nowIST.getMinutes() >= endMin);
+    
+    if (isPastEndTime) {
+        console.log(`[Scheduler] Skipping Premade Template for today (${todayName}) because end time (${settings.template_end_time}) has already passed.`);
+        return;
+    }
     
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const startIdx = days.indexOf(settings.template_start_day);
@@ -608,8 +620,13 @@ function applyTemplateForToday() {
     }
     
     if (isWithinDays) {
-        // Only select users who have the feature enabled
-        const users = db.prepare("SELECT id, name, template_team_name, template_meeting_name FROM users WHERE auto_template_enabled = 1").all();
+        let query = "SELECT id, name, template_team_name, template_meeting_name FROM users WHERE auto_template_enabled = 1";
+        let params = [];
+        if (targetUserId) {
+            query += " AND id = ?";
+            params.push(targetUserId);
+        }
+        const users = db.prepare(query).all(...params);
         users.forEach(u => {
             const teamName = u.template_team_name || 'Template';
             const meetingName = u.template_meeting_name || 'Premade Template';
