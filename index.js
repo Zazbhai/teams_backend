@@ -127,10 +127,6 @@ app.put('/api/users/me/auto_template', authenticateToken, (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-        console.error("Error fetching user profile:", e);
-        res.status(500).json({ detail: "Internal Server Error" });
-    }
-});
 
 app.use(express.json());
 app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
