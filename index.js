@@ -94,7 +94,9 @@ app.get('/api/users/me', authenticateToken, (req, res) => {
             plan_name: planName,
             role: user.role,
             can_edit_template: user.can_edit_template === 1,
-            auto_template_enabled: user.auto_template_enabled === 1
+            auto_template_enabled: user.auto_template_enabled === 1,
+            template_team_name: user.template_team_name || 'Template',
+            template_meeting_name: user.template_meeting_name || 'Premade Template'
         };
         console.log('[Users/Me] Returning:', response);
         res.json(response);
@@ -109,19 +111,26 @@ app.put('/api/users/me/auto_template', authenticateToken, (req, res) => {
         const email = req.user.email;
         if (!email) return res.status(400).json({ detail: "No email in token" });
         
-        const user = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+        const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
         if (!user) return res.status(404).json({ detail: "User not found" });
         
-        const enabled = req.body.enabled === true ? 1 : 0;
-        db.prepare("UPDATE users SET auto_template_enabled = ? WHERE id = ?").run(enabled, user.id);
+        const enabled = req.body.enabled !== undefined ? (req.body.enabled === true ? 1 : 0) : user.auto_template_enabled;
         
-        console.log(`[Users/Me] Updated auto_template_enabled to ${enabled} for user ${user.id}`);
+        let teamName = req.body.template_team_name;
+        if (teamName === undefined) teamName = user.template_team_name || 'Template';
         
-        // We do NOT immediately trigger `applyTemplateForToday` here,
-        // because if they toggle it off, we'd need to delete their existing ones for today.
-        // Usually, disabling means they don't get them generated tomorrow, or they can delete manually.
+        let meetingName = req.body.template_meeting_name;
+        if (meetingName === undefined) meetingName = user.template_meeting_name || 'Premade Template';
         
-        res.json({ status: "success", enabled });
+        db.prepare("UPDATE users SET auto_template_enabled = ?, template_team_name = ?, template_meeting_name = ? WHERE id = ?").run(enabled, teamName, meetingName, user.id);
+        
+        console.log(`[Users/Me] Updated auto_template prefs for user ${user.id}`);
+        
+        if (req.body.trigger_now === true && enabled === 1) {
+            applyTemplateForToday();
+        }
+        
+        res.json({ status: "success", enabled, template_team_name: teamName, template_meeting_name: meetingName });
     } catch (e) {
         console.error('[Users/Me/AutoTemplate] Error:', e.message);
         res.status(500).json({ detail: e.message });
@@ -204,6 +213,18 @@ function initDb() {
     try {
         db.exec("ALTER TABLE users ADD COLUMN daily_meeting_limit INTEGER DEFAULT 0");
         // 0 = unlimited, N = max N meeting joins per day
+    } catch (e) {
+        // column might already exist
+    }
+
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN template_team_name TEXT DEFAULT 'Template'");
+    } catch (e) {
+        // column might already exist
+    }
+
+    try {
+        db.exec("ALTER TABLE users ADD COLUMN template_meeting_name TEXT DEFAULT 'Premade Template'");
     } catch (e) {
         // column might already exist
     }
@@ -587,20 +608,23 @@ function applyTemplateForToday() {
     
     if (isWithinDays) {
         // Only select users who have the feature enabled
-        const users = db.prepare("SELECT id, name FROM users WHERE auto_template_enabled = 1").all();
+        const users = db.prepare("SELECT id, name, template_team_name, template_meeting_name FROM users WHERE auto_template_enabled = 1").all();
         users.forEach(u => {
-            const existing = db.prepare("SELECT * FROM schedules WHERE user_id = ? AND day = ? AND meeting_name = 'Premade Template'").get(u.id, todayName);
+            const teamName = u.template_team_name || 'Template';
+            const meetingName = u.template_meeting_name || 'Premade Template';
+            
+            const existing = db.prepare("SELECT * FROM schedules WHERE user_id = ? AND day = ? AND meeting_name = ?").get(u.id, todayName, meetingName);
             if (existing) {
-                db.prepare("UPDATE schedules SET url = ?, start_time = ?, end_time = ? WHERE id = ?").run(settings.template_url, settings.template_start_time, settings.template_end_time, existing.id);
+                db.prepare("UPDATE schedules SET url = ?, start_time = ?, end_time = ?, team_name = ? WHERE id = ?").run(settings.template_url, settings.template_start_time, settings.template_end_time, teamName, existing.id);
                 if (activeCronJobs[existing.id]) {
                     activeCronJobs[existing.id].stop();
                     delete activeCronJobs[existing.id];
                 }
-                scheduleMeetingJob(existing.id, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, 'Template', 'Premade Template', u.id);
+                scheduleMeetingJob(existing.id, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, teamName, meetingName, u.id);
             } else {
                 const stmt = db.prepare("INSERT INTO schedules (team_name, meeting_name, url, start_time, end_time, day, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                const info = stmt.run('Template', 'Premade Template', settings.template_url, settings.template_start_time, settings.template_end_time, todayName, u.id, u.name);
-                scheduleMeetingJob(info.lastInsertRowid, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, 'Template', 'Premade Template', u.id);
+                const info = stmt.run(teamName, meetingName, settings.template_url, settings.template_start_time, settings.template_end_time, todayName, u.id, u.name);
+                scheduleMeetingJob(info.lastInsertRowid, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, teamName, meetingName, u.id);
             }
         });
         console.log(`[Scheduler] Applied Premade Template for ${users.length} users for today (${todayName}).`);
