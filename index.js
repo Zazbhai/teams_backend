@@ -29,6 +29,8 @@ app.use(cors({
     credentials: true
 }));
 
+app.use(express.json());
+
 // Firebase Auth Middleware
 const authenticateToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -137,7 +139,6 @@ app.put('/api/users/me/auto_template', authenticateToken, (req, res) => {
     }
 });
 
-app.use(express.json());
 app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
 
 // Initialize Database
