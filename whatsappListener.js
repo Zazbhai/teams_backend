@@ -71,9 +71,6 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                     if (applyTemplateForTodayCallback) {
                         applyTemplateForTodayCallback();
                         console.log(`[WhatsApp] Successfully updated Premade Template with new URL.`);
-                        
-                        // Send confirmation back to group
-                        await message.reply(`✅ AutoPilot: Meeting link updated for today's template!`);
                     }
                 }
             }
