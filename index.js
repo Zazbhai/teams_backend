@@ -533,6 +533,53 @@ function loadJobsFromDb() {
 
 loadJobsFromDb();
 
+function applyTemplateForToday() {
+    const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+    const settingsRows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time')").all();
+    const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40' };
+    settingsRows.forEach(r => settings[r.key] = r.value);
+    
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const startIdx = days.indexOf(settings.template_start_day);
+    const endIdx = days.indexOf(settings.template_end_day);
+    const currentIdx = days.indexOf(todayName);
+    
+    let isWithinDays = false;
+    if (startIdx !== -1 && endIdx !== -1) {
+        if (startIdx <= endIdx) {
+            isWithinDays = currentIdx >= startIdx && currentIdx <= endIdx;
+        } else {
+            isWithinDays = currentIdx >= startIdx || currentIdx <= endIdx;
+        }
+    }
+    
+    if (isWithinDays) {
+        const users = db.prepare("SELECT id, name FROM users").all();
+        users.forEach(u => {
+            const existing = db.prepare("SELECT * FROM schedules WHERE user_id = ? AND day = ? AND meeting_name = 'Premade Template'").get(u.id, todayName);
+            if (existing) {
+                db.prepare("UPDATE schedules SET url = ?, start_time = ?, end_time = ? WHERE id = ?").run(settings.template_url, settings.template_start_time, settings.template_end_time, existing.id);
+                if (activeCronJobs[existing.id]) {
+                    activeCronJobs[existing.id].stop();
+                    delete activeCronJobs[existing.id];
+                }
+                scheduleMeetingJob(existing.id, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, 'Template', 'Premade Template', u.id);
+            } else {
+                const stmt = db.prepare("INSERT INTO schedules (team_name, meeting_name, url, start_time, end_time, day, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+                const info = stmt.run('Template', 'Premade Template', settings.template_url, settings.template_start_time, settings.template_end_time, todayName, u.id, u.name);
+                scheduleMeetingJob(info.lastInsertRowid, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, 'Template', 'Premade Template', u.id);
+            }
+        });
+        console.log(`[Scheduler] Applied Premade Template for ${users.length} users for today (${todayName}).`);
+    }
+}
+
+applyTemplateForToday();
+
+cron.schedule('1 0 * * *', () => {
+    applyTemplateForToday();
+}, { timezone: 'Asia/Kolkata' });
+
 // Routes
 
 app.get('/users/me', (req, res) => {
@@ -1007,31 +1054,9 @@ app.post('/settings/template', (req, res) => {
     if (start_time !== undefined) stmt.run('template_start_time', start_time, start_time);
     if (end_time !== undefined) stmt.run('template_end_time', end_time, end_time);
 
-    // If URL or times changed, patch TODAY's schedules only (not future days)
-    const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
-    if (url !== undefined || start_time !== undefined || end_time !== undefined) {
-        const todaySchedules = db.prepare("SELECT * FROM schedules WHERE day = ?").all(todayName);
-        todaySchedules.forEach(s => {
-            if (url !== undefined && url !== '') {
-                db.prepare("UPDATE schedules SET url = ? WHERE id = ?").run(url, s.id);
-                // Reschedule the cron job with new URL
-                if (activeCronJobs[s.id]) {
-                    activeCronJobs[s.id].stop();
-                    delete activeCronJobs[s.id];
-                }
-                scheduleMeetingJob(s.id, start_time || s.start_time, end_time || s.end_time, s.day, url, s.team_name, s.meeting_name, s.user_id);
-            }
-            if ((start_time !== undefined || end_time !== undefined) && url === undefined) {
-                const newStart = start_time || s.start_time;
-                const newEnd = end_time || s.end_time;
-                db.prepare("UPDATE schedules SET start_time = ?, end_time = ? WHERE id = ?").run(newStart, newEnd, s.id);
-                if (activeCronJobs[s.id]) {
-                    activeCronJobs[s.id].stop();
-                    delete activeCronJobs[s.id];
-                }
-                scheduleMeetingJob(s.id, newStart, newEnd, s.day, s.url, s.team_name, s.meeting_name, s.user_id);
-            }
-        });
+    // If template settings changed, apply template for today
+    if (url !== undefined || start_time !== undefined || end_time !== undefined || start_day !== undefined || end_day !== undefined) {
+        applyTemplateForToday();
     }
 
     res.json({ message: "Template settings updated successfully" });
