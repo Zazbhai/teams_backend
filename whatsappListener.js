@@ -5,7 +5,6 @@ let client = null;
 
 function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
     if (client) {
-        console.log('[WhatsApp] Bot is already running.');
         return;
     }
     console.log('[WhatsApp] Initializing WhatsApp bot...');
@@ -87,8 +86,6 @@ function stopWhatsAppBot() {
         console.log('[WhatsApp] Stopping WhatsApp bot...');
         client.destroy();
         client = null;
-    } else {
-        console.log('[WhatsApp] Bot is not running.');
     }
 }
 
