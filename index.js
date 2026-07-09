@@ -196,6 +196,12 @@ function initDb() {
     }
 
     try {
+        db.exec("ALTER TABLE users ADD COLUMN auto_template_enabled BOOLEAN DEFAULT 1");
+    } catch (e) {
+        // column might already exist
+    }
+
+    try {
         db.exec("ALTER TABLE users ADD COLUMN daily_meeting_limit INTEGER DEFAULT 0");
         // 0 = unlimited, N = max N meeting joins per day
     } catch (e) {
