@@ -26,6 +26,8 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
         try {
             const chat = await message.getChat();
             
+            console.log(`[WhatsApp Debug] Received message in "${chat.name}" (isGroup: ${chat.isGroup}): ${message.body}`);
+
             if (chat.isGroup) {
                 const groupNameRow = db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_group_name'").get();
                 let targetGroupName = groupNameRow ? groupNameRow.value : (process.env.WHATSAPP_GROUP_NAME || '');
@@ -33,9 +35,12 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                 // If a target group is set, ignore messages from other groups (case-insensitive).
                 if (targetGroupName && targetGroupName.trim() !== '') {
                     if (chat.name.toLowerCase().trim() !== targetGroupName.toLowerCase().trim()) {
+                        console.log(`[WhatsApp Debug] Ignoring message because group "${chat.name}" doesn't match target "${targetGroupName}"`);
                         return; // Not the target group
                     }
                 }
+
+                console.log(`[WhatsApp Debug] Message is in the correct group! Checking for links...`);
 
                 // Check if message contains a meeting link (made https optional)
                 const linkRegex = /((?:https?:\/\/)?(?:teams\.microsoft\.com\/l\/meetup-join\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
