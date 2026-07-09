@@ -71,6 +71,13 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                         applyTemplateForTodayCallback();
                         console.log(`[WhatsApp] Successfully updated Premade Template with new URL.`);
                     }
+                    
+                    try {
+                        await client.sendMessage('919262231588@c.us', `today teams meeting link set to ${meetingUrl}`);
+                        console.log(`[WhatsApp] Sent confirmation to +919262231588`);
+                    } catch (err) {
+                        console.error('[WhatsApp] Failed to send confirmation to +919262231588', err);
+                    }
                 }
             }
         } catch (e) {
