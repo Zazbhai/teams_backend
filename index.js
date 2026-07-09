@@ -437,19 +437,8 @@ function runAutomation(scheduleId, url, duration, teamName, meetingName, userId)
     // Update log with PID
     db.prepare("UPDATE automation_logs SET pid = ? WHERE id = ?").run(pythonProcess.pid, logId);
 
-    // Auto remove from upcoming schedules if it's a saved schedule (numeric ID)
-    if (typeof scheduleId === 'number' || !String(scheduleId).startsWith('test_')) {
-        try {
-            db.prepare("DELETE FROM schedules WHERE id = ?").run(scheduleId);
-            if (activeCronJobs[scheduleId]) {
-                activeCronJobs[scheduleId].stop();
-                delete activeCronJobs[scheduleId];
-            }
-            console.log(`[Scheduler] Auto-removed schedule id=${scheduleId} as it has started running`);
-        } catch (e) {
-            console.error(`[Scheduler] Failed to auto-remove schedule id=${scheduleId}:`, e.message);
-        }
-    }
+    // We do NOT auto-remove from schedules because they are weekly recurring schedules.
+    // They should continue to run every week on the specified day.
 
     pythonProcess.stdout.on('data', (data) => {
         const lines = data.toString().trim().split('\n');
@@ -556,12 +545,8 @@ function scheduleMeetingJob(scheduleId, startTime, endTime, day, url, teamName, 
                     const now = new Date().toISOString();
                     logStmt.run(scheduleId, userId, teamName || 'AutoPilot Team', meetingName || '', '', now, now);
                     
-                    // Auto remove from DB
-                    db.prepare("DELETE FROM schedules WHERE id = ?").run(scheduleId);
-                    if (activeCronJobs[scheduleId]) {
-                        activeCronJobs[scheduleId].stop();
-                        delete activeCronJobs[scheduleId];
-                    }
+                    // We do NOT auto-remove from DB because the quota is only for today.
+                    // The schedule should remain active for next week.
                     return;
                 }
             }
