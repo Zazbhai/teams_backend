@@ -30,7 +30,7 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                 // Fetch group name from settings. If empty, we can process all groups,
                 // but usually users want a specific group.
                 const groupNameRow = db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_group_name'").get();
-                let targetGroupName = groupNameRow ? groupNameRow.value : '';
+                let targetGroupName = groupNameRow ? groupNameRow.value : (process.env.WHATSAPP_GROUP_NAME || '');
                 
                 // If a target group is set, ignore messages from other groups.
                 if (targetGroupName && targetGroupName.trim() !== '' && chat.name !== targetGroupName) {
