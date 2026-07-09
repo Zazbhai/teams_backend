@@ -22,27 +22,30 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
         console.log('[WhatsApp] Client is ready and listening for meeting links!');
     });
 
-    client.on('message', async (message) => {
+    client.on('message_create', async (message) => {
         try {
             const chat = await message.getChat();
             
             if (chat.isGroup) {
-                // Fetch group name from settings. If empty, we can process all groups,
-                // but usually users want a specific group.
                 const groupNameRow = db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_group_name'").get();
                 let targetGroupName = groupNameRow ? groupNameRow.value : (process.env.WHATSAPP_GROUP_NAME || '');
                 
-                // If a target group is set, ignore messages from other groups.
-                if (targetGroupName && targetGroupName.trim() !== '' && chat.name !== targetGroupName) {
-                    return;
+                // If a target group is set, ignore messages from other groups (case-insensitive).
+                if (targetGroupName && targetGroupName.trim() !== '') {
+                    if (chat.name.toLowerCase().trim() !== targetGroupName.toLowerCase().trim()) {
+                        return; // Not the target group
+                    }
                 }
 
-                // Check if message contains a meeting link
-                const linkRegex = /(https?:\/\/(?:teams\.microsoft\.com\/l\/meetup-join\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
+                // Check if message contains a meeting link (made https optional)
+                const linkRegex = /((?:https?:\/\/)?(?:teams\.microsoft\.com\/l\/meetup-join\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
                 const match = message.body.match(linkRegex);
 
                 if (match && match.length > 0) {
-                    const meetingUrl = match[0];
+                    let meetingUrl = match[0];
+                    if (!meetingUrl.startsWith('http')) {
+                        meetingUrl = 'https://' + meetingUrl;
+                    }
                     console.log(`[WhatsApp] Found meeting link in group "${chat.name}": ${meetingUrl}`);
                     
                     // Save to database
