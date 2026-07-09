@@ -32,9 +32,12 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                 const groupNameRow = db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_group_name'").get();
                 let targetGroupName = groupNameRow ? groupNameRow.value : (process.env.WHATSAPP_GROUP_NAME || '');
                 
-                // If a target group is set, ignore messages from other groups (case-insensitive).
+                // Normalize whitespaces (like newlines) to a single space before comparing
+                const normalize = (str) => str.replace(/\s+/g, ' ').trim().toLowerCase();
+
+                // If a target group is set, ignore messages from other groups (case-insensitive & ignoring newlines).
                 if (targetGroupName && targetGroupName.trim() !== '') {
-                    if (chat.name.toLowerCase().trim() !== targetGroupName.toLowerCase().trim()) {
+                    if (normalize(chat.name) !== normalize(targetGroupName)) {
                         console.log(`[WhatsApp Debug] Ignoring message because group "${chat.name}" doesn't match target "${targetGroupName}"`);
                         return; // Not the target group
                     }
@@ -43,7 +46,8 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                 console.log(`[WhatsApp Debug] Message is in the correct group! Checking for links...`);
 
                 // Check if message contains a meeting link (made https optional)
-                const linkRegex = /((?:https?:\/\/)?(?:teams\.microsoft\.com\/l\/meetup-join\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
+                // Added support for teams.microsoft.com/meet/ format
+                const linkRegex = /((?:https?:\/\/)?(?:teams\.microsoft\.com\/(?:l\/meetup-join|meet)\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
                 const match = message.body.match(linkRegex);
 
                 if (match && match.length > 0) {
