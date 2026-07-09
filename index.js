@@ -590,72 +590,73 @@ function loadJobsFromDb() {
 
 loadJobsFromDb();
 
-function applyTemplateForToday(targetUserId = null) {
-    const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+function applyTemplateForAllDays(targetUserId = null) {
     const settingsRows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time')").all();
     const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40' };
     settingsRows.forEach(r => settings[r.key] = r.value);
     
-    // Check if end time is already passed today in IST
-    const endTimeParts = settings.template_end_time.split(':');
-    const nowIST = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-    const endHour = parseInt(endTimeParts[0], 10);
-    const endMin = parseInt(endTimeParts[1], 10);
-    const isPastEndTime = (nowIST.getHours() > endHour) || (nowIST.getHours() === endHour && nowIST.getMinutes() >= endMin);
-    
-    if (isPastEndTime) {
-        console.log(`[Scheduler] Skipping Premade Template for today (${todayName}) because end time (${settings.template_end_time}) has already passed.`);
-        return;
-    }
-    
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const startIdx = days.indexOf(settings.template_start_day);
     const endIdx = days.indexOf(settings.template_end_day);
-    const currentIdx = days.indexOf(todayName);
     
-    let isWithinDays = false;
+    let activeDays = [];
     if (startIdx !== -1 && endIdx !== -1) {
         if (startIdx <= endIdx) {
-            isWithinDays = currentIdx >= startIdx && currentIdx <= endIdx;
+            for (let i = startIdx; i <= endIdx; i++) activeDays.push(days[i]);
         } else {
-            isWithinDays = currentIdx >= startIdx || currentIdx <= endIdx;
+            for (let i = startIdx; i <= 6; i++) activeDays.push(days[i]);
+            for (let i = 0; i <= endIdx; i++) activeDays.push(days[i]);
         }
     }
     
-    if (isWithinDays) {
-        let query = "SELECT id, name, template_team_name, template_meeting_name FROM users WHERE auto_template_enabled = 1";
-        let params = [];
-        if (targetUserId) {
-            query += " AND id = ?";
-            params.push(targetUserId);
-        }
-        const users = db.prepare(query).all(...params);
-        users.forEach(u => {
-            const teamName = u.template_team_name || 'Template';
-            const meetingName = u.template_meeting_name || 'Premade Template';
-            
-            const existing = db.prepare("SELECT * FROM schedules WHERE user_id = ? AND day = ? AND meeting_name = ?").get(u.id, todayName, meetingName);
+    let query = "SELECT id, name, template_team_name, template_meeting_name FROM users WHERE auto_template_enabled = 1";
+    let params = [];
+    if (targetUserId) {
+        query += " AND id = ?";
+        params.push(targetUserId);
+    }
+    const users = db.prepare(query).all(...params);
+    
+    users.forEach(u => {
+        const teamName = u.template_team_name || 'Template';
+        const meetingName = u.template_meeting_name || 'Premade Template';
+        
+        // Clean up days that are no longer in the active range
+        const existingSchedules = db.prepare("SELECT id, day FROM schedules WHERE user_id = ? AND meeting_name = ?").all(u.id, meetingName);
+        existingSchedules.forEach(s => {
+            if (!activeDays.includes(s.day)) {
+                db.prepare("DELETE FROM schedules WHERE id = ?").run(s.id);
+                if (activeCronJobs[s.id]) {
+                    activeCronJobs[s.id].stop();
+                    delete activeCronJobs[s.id];
+                }
+            }
+        });
+        
+        activeDays.forEach(dayName => {
+            const existing = db.prepare("SELECT * FROM schedules WHERE user_id = ? AND day = ? AND meeting_name = ?").get(u.id, dayName, meetingName);
             if (existing) {
                 db.prepare("UPDATE schedules SET url = ?, start_time = ?, end_time = ?, team_name = ? WHERE id = ?").run(settings.template_url, settings.template_start_time, settings.template_end_time, teamName, existing.id);
                 if (activeCronJobs[existing.id]) {
                     activeCronJobs[existing.id].stop();
                     delete activeCronJobs[existing.id];
                 }
-                scheduleMeetingJob(existing.id, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, teamName, meetingName, u.id);
+                scheduleMeetingJob(existing.id, settings.template_start_time, settings.template_end_time, dayName, settings.template_url, teamName, meetingName, u.id);
             } else {
                 const stmt = db.prepare("INSERT INTO schedules (team_name, meeting_name, url, start_time, end_time, day, user_id, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                const info = stmt.run(teamName, meetingName, settings.template_url, settings.template_start_time, settings.template_end_time, todayName, u.id, u.name);
-                scheduleMeetingJob(info.lastInsertRowid, settings.template_start_time, settings.template_end_time, todayName, settings.template_url, teamName, meetingName, u.id);
+                const info = stmt.run(teamName, meetingName, settings.template_url, settings.template_start_time, settings.template_end_time, dayName, u.id, u.name);
+                scheduleMeetingJob(info.lastInsertRowid, settings.template_start_time, settings.template_end_time, dayName, settings.template_url, teamName, meetingName, u.id);
             }
         });
-        console.log(`[Scheduler] Applied Premade Template for ${users.length} users for today (${todayName}).`);
-    }
+    });
+    console.log(`[Scheduler] Applied Premade Template for ${users.length} users for days: ${activeDays.join(', ')}`);
 }
 
-applyTemplateForToday();
+applyTemplateForAllDays();
 
 cron.schedule('1 0 * * *', () => {
-    applyTemplateForToday();
+    // applyTemplateForAllDays(); // Not strictly needed to run daily anymore since we populate all days. But keeping it as a daily sync is fine.
+    applyTemplateForAllDays();
 }, { timezone: 'Asia/Kolkata' });
 
 // Routes
