@@ -4,3 +4,4 @@ scheduler.db
 scheduler.db-journal
 *.log
 __pycache__/
+whatsapp-session/

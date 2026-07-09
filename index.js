@@ -16,6 +16,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
+const { setupWhatsAppBot } = require('./whatsappListener');
 
 const app = express();
 const server = http.createServer(app);
@@ -1129,4 +1130,11 @@ app.delete('/api/subscriptions/:id', (req, res) => {
 
 server.listen(PORT, () => {
     console.log(`Teams AutoPilot backend listening at http://localhost:${PORT}`);
+    
+    // Initialize WhatsApp link fetcher
+    try {
+        setupWhatsAppBot(db, applyTemplateForToday);
+    } catch (e) {
+        console.error("Error setting up WhatsApp bot:", e);
+    }
 });

@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  teams-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: teams_autopilot_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - PYTHON_PATH=/app/venv/bin/python
+      - CHROME_BINARY_PATH=/usr/bin/chromium
+      # Uncomment and set your Firebase project ID or use a .env file
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-teams-1fef2}
+    env_file:
+      - .env
+    volumes:
+      # Persistent SQLite database storage
+      - ./teams_autopilot.db:/app/teams_autopilot.db
+      - ./database.sqlite:/app/database.sqlite
+      # Persistent screenshots storage
+      - ./screenshots:/app/screenshots
+    shm_size: '2gb'
