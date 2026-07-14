@@ -137,6 +137,22 @@ async function cancelAutomation(logId) {
     return true;
 }
 
+// Function to handle extending time via ADDTIME command file
+async function extendAutomation(logId, extraMins) {
+    const processInfo = activeProcesses[logId];
+    if (!processInfo) return false;
+
+    const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.process?.pid}.txt`);
+    try {
+        fs.writeFileSync(cmdFile, `ADDTIME ${extraMins}`);
+        console.log(`[Extend] Wrote ADDTIME ${extraMins} to ${cmdFile}`);
+        return true;
+    } catch (e) {
+        console.error(`[Extend] Failed to write ADDTIME to ${cmdFile}`, e);
+        return false;
+    }
+}
+
 // Take a screenshot
 async function takeScreenshot(logId, screenshotsDir) {
     const processInfo = activeProcesses[logId];
@@ -202,6 +218,7 @@ async function checkSchedules() {
 module.exports = {
     checkSchedules,
     cancelAutomation,
+    extendAutomation,
     takeScreenshot,
     activeProcesses,
     runAutomation,

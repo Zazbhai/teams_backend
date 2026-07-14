@@ -290,6 +290,13 @@ try:
                     if parts[0] == "LEAVE":
                         log("Received LEAVE command from backend.")
                         break
+                    elif parts[0] == "ADDTIME" and len(parts) > 1:
+                        try:
+                            extra_mins = int(parts[1])
+                            end_time += (extra_mins * 60)
+                            log("Received ADDTIME command. Added " + str(extra_mins) + " minutes.")
+                        except Exception as e:
+                            log("Failed to parse ADDTIME minutes: " + str(e))
                     elif parts[0] == "SCREENSHOT" and len(parts) > 1:
                         screenshot_path = parts[1]
                         log("Received SCREENSHOT command. Saving to " + screenshot_path)

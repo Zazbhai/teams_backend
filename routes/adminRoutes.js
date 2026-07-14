@@ -6,7 +6,7 @@ const User = require('../models/User');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
 const AutomationLog = require('../models/AutomationLog');
 const Schedule = require('../models/Schedule');
-const { activeProcesses, runAutomation, checkDailyQuota, cancelAutomation, takeScreenshot } = require('../services/automation');
+const { activeProcesses, runAutomation, checkDailyQuota, cancelAutomation, extendAutomation, takeScreenshot } = require('../services/automation');
 
 module.exports = function(authenticateToken, io) {
 
@@ -128,6 +128,8 @@ module.exports = function(authenticateToken, io) {
             res.json({ message: "Role updated" });
         } catch (e) { res.status(500).json({ detail: e.message }); }
     });
+
+
 
     router.put('/users/:id/template_permission', authenticateToken, async (req, res) => {
         try {
@@ -318,6 +320,22 @@ module.exports = function(authenticateToken, io) {
         try {
             await cancelAutomation(id);
             res.json({ message: "Leave command sent successfully" });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    router.post('/automations/active/:id/extend', authenticateToken, async (req, res) => {
+        const id = req.params.id;
+        const processInfo = activeProcesses[id];
+        if (!processInfo) {
+            return res.status(404).json({ error: "Process not found" });
+        }
+        
+        try {
+            const mins = parseInt(req.body.minutes) || 15;
+            await extendAutomation(id, mins);
+            res.json({ message: `Added ${mins} minutes to automation` });
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
