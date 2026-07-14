@@ -34,10 +34,13 @@ function setupWhatsAppBot(applyTemplateForTodayCallback) {
         try {
             if (message.isStatus || message.from === 'status@broadcast') return;
 
+            console.log(`[WhatsApp Debug] New raw message from ${message.from}: ${message.body}`);
+
             let chat;
             try {
                 chat = await message.getChat();
             } catch (err) {
+                console.log(`[WhatsApp Debug] getChat() failed for message from ${message.from}. Error: ${err.message}`);
                 // Ignore random puppeteer evaluate errors (like 'r: r') for system messages
                 return;
             }
