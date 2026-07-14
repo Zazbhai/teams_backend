@@ -116,5 +116,57 @@ module.exports = function(authenticateToken, io) {
         }
     });
 
+    router.get('/api/subscriptions', async (req, res) => {
+        try {
+            const plans = await SubscriptionPlan.find().lean();
+            for (let p of plans) {
+                const now = new Date().toISOString();
+                p.active_users = await User.countDocuments({ 
+                    plan_id: p._id, 
+                    has_subscription: 1,
+                    $or: [
+                        { subscription_end_date: null },
+                        { subscription_end_date: { $gt: now } }
+                    ]
+                });
+                p.id = p._id;
+            }
+            res.json({ plans });
+        } catch (e) {
+            res.status(500).json({ detail: e.message });
+        }
+    });
+
+    router.post('/api/subscriptions', async (req, res) => {
+        try {
+            const { name, price, description, duration_days } = req.body;
+            const duration = duration_days ? parseInt(duration_days) : 30;
+            const plan = await SubscriptionPlan.create({ name, price, description, duration_days: duration });
+            res.json({ status: "success", id: plan._id });
+        } catch (e) {
+            res.status(500).json({ detail: e.message });
+        }
+    });
+
+    router.put('/api/subscriptions/:id', async (req, res) => {
+        try {
+            const { name, price, description, duration_days } = req.body;
+            const duration = duration_days ? parseInt(duration_days) : 30;
+            await SubscriptionPlan.findByIdAndUpdate(req.params.id, { name, price, description, duration_days: duration });
+            res.json({ status: "success" });
+        } catch (e) {
+            res.status(500).json({ detail: e.message });
+        }
+    });
+
+    router.delete('/api/subscriptions/:id', async (req, res) => {
+        try {
+            await SubscriptionPlan.findByIdAndDelete(req.params.id);
+            res.json({ status: "success" });
+        } catch (e) {
+            res.status(500).json({ detail: e.message });
+        }
+    });
+
     return router;
 };
