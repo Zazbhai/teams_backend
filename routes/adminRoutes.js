@@ -391,7 +391,7 @@ module.exports = function(authenticateToken, io) {
             const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time } = req.body;
 
             const upsert = async (key, val) => {
-                if (val !== undefined) await Setting.findOneAndUpdate({ key }, { value: val }, { upsert: true, new: true });
+                if (val !== undefined) await Setting.findOneAndUpdate({ key }, { value: val }, { upsert: true, returnDocument: 'after' });
             };
 
             await upsert('template_url', url);

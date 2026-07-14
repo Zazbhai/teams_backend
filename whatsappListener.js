@@ -37,7 +37,15 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
 
     client.on('message_create', async (message) => {
         try {
-            const chat = await message.getChat();
+            if (message.isStatus || message.from === 'status@broadcast') return;
+
+            let chat;
+            try {
+                chat = await message.getChat();
+            } catch (err) {
+                // Ignore random puppeteer evaluate errors (like 'r: r') for system messages
+                return;
+            }
             
             console.log(`[WhatsApp Debug] Received message in "${chat.name}" (isGroup: ${chat.isGroup}): ${message.body}`);
 
