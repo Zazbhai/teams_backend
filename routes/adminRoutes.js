@@ -301,6 +301,7 @@ module.exports = function(authenticateToken, io) {
                         meeting_name: p.meetingName,
                         url: p.url,
                         started_at: p.startedAt,
+                        expected_end_time: p.expectedEndTime,
                         current_step: p.currentStep ?? 0
                     });
                 }

@@ -66,7 +66,9 @@ async function runAutomation(scheduleId, url, duration, teamName, meetingName, u
         '--headless'
     ]);
 
-    activeProcesses[logId] = { process: pythonProcess, userId, scheduleId, meetingName, url, startedAt, currentStep: 0, leaveRequested: false };
+    const expectedEndTime = new Date(Date.now() + duration * 60000).toISOString();
+
+    activeProcesses[logId] = { process: pythonProcess, userId, scheduleId, meetingName, url, startedAt, expectedEndTime, currentStep: 0, leaveRequested: false };
 
     await AutomationLog.findByIdAndUpdate(logId, { pid: pythonProcess.pid });
 
@@ -145,6 +147,10 @@ async function extendAutomation(logId, extraMins) {
     const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.process?.pid}.txt`);
     try {
         fs.writeFileSync(cmdFile, `ADDTIME ${extraMins}`);
+        if (processInfo.expectedEndTime) {
+            const currentEnd = new Date(processInfo.expectedEndTime).getTime();
+            processInfo.expectedEndTime = new Date(currentEnd + extraMins * 60000).toISOString();
+        }
         console.log(`[Extend] Wrote ADDTIME ${extraMins} to ${cmdFile}`);
         return true;
     } catch (e) {
