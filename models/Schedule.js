@@ -5,7 +5,7 @@ const scheduleSchema = new mongoose.Schema({
   user_name: { type: String },
   team_name: { type: String, required: true },
   meeting_name: { type: String, required: true },
-  url: { type: String, required: true },
+  url: { type: String },
   start_time: { type: String, required: true },
   end_time: { type: String, required: true },
   day: { type: String, required: true },
