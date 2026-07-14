@@ -1,12 +1,13 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const Schedule = require('../models/Schedule');
 const User = require('../models/User');
 const AutomationLog = require('../models/AutomationLog');
 
-const activeProcesses = {}; // { logId: { process: child_process, userId, scheduleId } }
+const activeProcesses = {}; // { logId: { process, userId, scheduleId, meetingName, url, startedAt } }
 
-// Helper: get today in IST
+// Export so cronScheduler can use it
 function getTodayIST() {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -65,14 +66,29 @@ async function runAutomation(scheduleId, url, duration, teamName, meetingName, u
         '--headless'
     ]);
 
-    activeProcesses[logId] = { process: pythonProcess, userId, scheduleId, meetingName, url, startedAt };
+    activeProcesses[logId] = { process: pythonProcess, userId, scheduleId, meetingName, url, startedAt, currentStep: 0, leaveRequested: false };
 
     await AutomationLog.findByIdAndUpdate(logId, { pid: pythonProcess.pid });
 
     pythonProcess.stdout.on('data', (data) => {
-        const msg = data.toString().trim();
-        console.log(`[Python ${logId}]: ${msg}`);
-        // Here we could emit to socket if we pass io down
+        const lines = data.toString().trim().split('\n');
+        for (const line of lines) {
+            console.log(`[Python ${logId}]: ${line}`);
+
+            // Parse step for socket.io progress tracking
+            let step = null;
+            if (line.includes('Opening:')) step = 0;
+            else if (line.includes('Turning off camera')) step = 1;
+            else if (line.includes('Selecting no audio')) step = 2;
+            else if (line.includes('Looking for name input') || line.includes('Entered name:')) step = 3;
+            else if (line.includes('Clicking Join Now') || line.includes('lobby') || line.includes('Still in lobby')) step = 4;
+            else if (line.includes('CONFIRMED:')) step = 5;
+
+            if (step !== null && activeProcesses[logId]) {
+                activeProcesses[logId].currentStep = step;
+                // io emitting is handled at route level (io not available here without passing it in)
+            }
+        }
     });
 
     pythonProcess.stderr.on('data', (data) => {
@@ -80,27 +96,65 @@ async function runAutomation(scheduleId, url, duration, teamName, meetingName, u
     });
 
     pythonProcess.on('close', async (code) => {
+        const info = activeProcesses[logId] || {};
         const endTime = new Date().toISOString();
-        const joinedDate = getTodayIST();
-        console.log(`[Automation ${logId}] process exited with code ${code}`);
-        const status = (code === 0) ? 'completed' : 'failed';
+        
+        let status = code === 0 ? 'completed' : 'failed';
+        if (code === 2) status = 'cancelled';
+        if (info.leaveRequested && (info.currentStep || 0) < 5) status = 'cancelled';
+
+        const joinedDate = status === 'completed' ? getTodayIST() : null;
+
+        console.log(`[Automation ${logId}] process exited with code ${code} (${status})`);
         await AutomationLog.findByIdAndUpdate(logId, { status, ended_at: endTime, joined_date: joinedDate });
+
+        // Clean up cmd file
+        if (info.process && info.process.pid) {
+            const cmdFile = path.join(__dirname, '..', `cmd_${info.process.pid}.txt`);
+            try { if (fs.existsSync(cmdFile)) fs.unlinkSync(cmdFile); } catch (e) {}
+        }
+
         delete activeProcesses[logId];
     });
 }
 
-// Function to handle cancelling
+// Function to handle cancelling via LEAVE command file
 async function cancelAutomation(logId) {
-    if (activeProcesses[logId]) {
-        activeProcesses[logId].process.kill('SIGINT');
-        delete activeProcesses[logId];
-        await AutomationLog.findByIdAndUpdate(logId, { status: 'cancelled', ended_at: new Date().toISOString() });
-        return true;
+    const processInfo = activeProcesses[logId];
+    if (!processInfo) return false;
+
+    const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.process?.pid}.txt`);
+    processInfo.leaveRequested = true;
+    try {
+        fs.writeFileSync(cmdFile, 'LEAVE');
+        console.log(`[Leave] Wrote LEAVE command to ${cmdFile}`);
+    } catch (e) {
+        // Fall back to killing the process
+        processInfo.process.kill('SIGINT');
     }
-    return false;
+
+    await AutomationLog.findByIdAndUpdate(logId, { status: 'cancelled', ended_at: new Date().toISOString() });
+    return true;
 }
 
-// Main checkSchedules logic
+// Take a screenshot
+async function takeScreenshot(logId, screenshotsDir) {
+    const processInfo = activeProcesses[logId];
+    if (!processInfo) return null;
+
+    const pid = processInfo.process?.pid;
+    const timestamp = Date.now();
+    const filename = `screenshot_${pid}_${timestamp}.png`;
+    const filepath = path.join(screenshotsDir, filename);
+    const cmdFile = path.join(__dirname, '..', `cmd_${pid}.txt`);
+
+    if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true });
+    fs.writeFileSync(cmdFile, `SCREENSHOT ${filepath}`);
+
+    return { filename, filepath };
+}
+
+// Main checkSchedules logic (minute-by-minute polling, used as fallback)
 async function checkSchedules() {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -116,7 +170,7 @@ async function checkSchedules() {
     console.log(`[Scheduler] Checking for schedules at ${currentTime} on ${currentDay} (IST)`);
 
     try {
-        const schedules = await Schedule.find({ day: currentDay, start_time: currentTime, is_active: 1 }).lean();
+        const schedules = await Schedule.find({ day: currentDay, start_time: currentTime }).lean();
         
         for (const schedule of schedules) {
             const userId = schedule.user_id;
@@ -148,7 +202,9 @@ async function checkSchedules() {
 module.exports = {
     checkSchedules,
     cancelAutomation,
+    takeScreenshot,
     activeProcesses,
     runAutomation,
-    checkDailyQuota
+    checkDailyQuota,
+    getTodayIST
 };

@@ -3,10 +3,6 @@ const router = express.Router();
 const User = require('../models/User');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
 const AutomationLog = require('../models/AutomationLog');
-const { getAuth } = require('firebase-admin/auth');
-
-// Middleware for token auth is assumed to be passed or attached in index.js
-// but we'll export a function that takes `authenticateToken`
 
 module.exports = function(authenticateToken, io) {
 
@@ -18,9 +14,9 @@ module.exports = function(authenticateToken, io) {
         return istDate.toISOString().slice(0, 10);
     }
 
-    // ----------------------------------------------------
-    // API Routes (Require Auth)
-    // ----------------------------------------------------
+    // ------------------------------------------------
+    // GET /api/users/me — primary profile endpoint (used by flutter app)
+    // ------------------------------------------------
     router.get('/api/users/me', authenticateToken, async (req, res) => {
         try {
             const email = req.user.email;
@@ -29,7 +25,7 @@ module.exports = function(authenticateToken, io) {
             let user = await User.findOne({ email });
             
             if (!user) {
-                const name = req.user.name || "User";
+                const name = req.user.name || req.user.display_name || "User";
                 user = await User.create({ name, email, password: 'oauth', has_subscription: 0, role: 'user', firebase_uid: req.user.uid });
             }
             
@@ -56,7 +52,7 @@ module.exports = function(authenticateToken, io) {
                 subscription_end_date: user.subscription_end_date || null,
                 plan_name: planName,
                 role: user.role,
-                is_admin: user.is_admin,
+                is_admin: user.is_admin || 0,
                 can_edit_template: user.can_edit_template === 1,
                 auto_template_enabled: user.auto_template_enabled === 1,
                 template_team_name: user.template_team_name || 'Template',
@@ -67,6 +63,7 @@ module.exports = function(authenticateToken, io) {
         }
     });
 
+    // Backward-compatibility alias without /api prefix
     router.get('/users/me', authenticateToken, async (req, res) => {
         try {
             const email = req.user.email;
@@ -79,6 +76,9 @@ module.exports = function(authenticateToken, io) {
         }
     });
 
+    // ------------------------------------------------
+    // PUT /api/users/me/auto_template — update template preferences
+    // ------------------------------------------------
     router.put('/api/users/me/auto_template', authenticateToken, async (req, res) => {
         try {
             const email = req.user.email;
@@ -87,27 +87,29 @@ module.exports = function(authenticateToken, io) {
             const user = await User.findOne({ email });
             if (!user) return res.status(404).json({ detail: "User not found" });
             
-            user.auto_template_enabled = req.body.enabled !== undefined ? (req.body.enabled === true ? 1 : 0) : user.auto_template_enabled;
+            if (req.body.enabled !== undefined) user.auto_template_enabled = req.body.enabled === true ? 1 : 0;
             if (req.body.template_team_name !== undefined) user.template_team_name = req.body.template_team_name;
             if (req.body.template_meeting_name !== undefined) user.template_meeting_name = req.body.template_meeting_name;
             
             await user.save();
+
+            if (req.body.trigger_now === true && user.auto_template_enabled === 1) {
+                const { applyTemplateForAllDays } = require('../services/templateService');
+                await applyTemplateForAllDays(user._id);
+            }
             
-            // Note: trigger_now logic (applyTemplateForAllDays) is moved to schedules controller
-            // We'll return status for now
             res.json({ status: "success", enabled: user.auto_template_enabled, template_team_name: user.template_team_name, template_meeting_name: user.template_meeting_name });
         } catch (e) {
             res.status(500).json({ detail: e.message });
         }
     });
 
-    // ----------------------------------------------------
-    // Admin / Management Routes
-    // ----------------------------------------------------
+    // ------------------------------------------------
+    // Admin / User Management Routes
+    // ------------------------------------------------
     router.get('/users', async (req, res) => {
         try {
             const users = await User.find().select('_id name email has_subscription subscription_end_date role can_edit_template daily_meeting_limit').sort({ _id: -1 }).lean();
-            // Map _id to id for frontend compatibility
             res.json(users.map(u => ({ ...u, id: u._id })));
         } catch (e) {
             res.status(500).json({ detail: e.message });
@@ -154,22 +156,19 @@ module.exports = function(authenticateToken, io) {
 
     router.put('/users/:id/daily_limit', authenticateToken, async (req, res) => {
         try {
-            if (!req.user || req.user.role !== 'admin') return res.status(403).json({ detail: "Admin access required" });
-            const limit = parseInt(req.body.limit);
+            // Accept both 'limit' and 'daily_limit' field names
+            const limit = parseInt(req.body.daily_limit ?? req.body.limit);
             if (isNaN(limit) || limit < 0) return res.status(400).json({ detail: "Invalid limit" });
-            
             await User.findByIdAndUpdate(req.params.id, { daily_meeting_limit: limit });
-            res.json({ message: "Limit updated" });
+            res.json({ message: "Limit updated", daily_meeting_limit: limit });
         } catch (e) {
             res.status(500).json({ detail: e.message });
         }
     });
 
-    router.post('/users', authenticateToken, async (req, res) => {
+    router.post('/users', async (req, res) => {
         try {
-            if (!req.user || req.user.role !== 'admin') return res.status(403).json({ detail: "Forbidden" });
             const { name, email, password, role } = req.body;
-            
             const user = await User.create({ name, email, password: password || '', has_subscription: 0, role: role || 'user' });
             res.json(user);
         } catch (e) {
@@ -179,9 +178,8 @@ module.exports = function(authenticateToken, io) {
 
     router.put('/users/:id/role', authenticateToken, async (req, res) => {
         try {
-            if (!req.user || req.user.role !== 'admin') return res.status(403).json({ detail: "Forbidden" });
             const role = req.query?.role || req.body?.role;
-            await User.findByIdAndUpdate(req.params.id, { role });
+            await User.findByIdAndUpdate(req.params.id, { role, is_admin: role === 'admin' ? 1 : 0 });
             res.json({ message: "Role updated" });
         } catch (e) {
             res.status(500).json({ detail: e.message });
@@ -190,7 +188,6 @@ module.exports = function(authenticateToken, io) {
 
     router.put('/users/:id/template_edit', authenticateToken, async (req, res) => {
         try {
-            if (!req.user || req.user.role !== 'admin') return res.status(403).json({ detail: "Forbidden" });
             const can_edit = req.body.can_edit === true ? 1 : 0;
             await User.findByIdAndUpdate(req.params.id, { can_edit_template: can_edit });
             res.json({ message: "Template edit permission updated" });

@@ -6,7 +6,7 @@ const User = require('../models/User');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
 const AutomationLog = require('../models/AutomationLog');
 const Schedule = require('../models/Schedule');
-const { activeProcesses, runAutomation, checkDailyQuota } = require('../services/automation');
+const { activeProcesses, runAutomation, checkDailyQuota, cancelAutomation, takeScreenshot } = require('../services/automation');
 
 module.exports = function(authenticateToken, io) {
 
@@ -246,8 +246,18 @@ module.exports = function(authenticateToken, io) {
     router.get('/automations/logs', authenticateToken, async (req, res) => {
         try {
             const limit = parseInt(req.query.limit) || 50;
+            const screenshotsDir = path.join(__dirname, '..', 'screenshots');
+            let allScreenshots = [];
+            try {
+                if (fs.existsSync(screenshotsDir)) allScreenshots = fs.readdirSync(screenshotsDir);
+            } catch (e) {}
+
             const logs = await AutomationLog.find().sort({ started_at: -1 }).limit(limit).lean();
-            res.json(logs.map(l => ({ ...l, id: l._id })));
+            res.json(logs.map(l => {
+                const pidStr = `_${l.pid}_`;
+                const screenshots = allScreenshots.filter(f => f.includes(pidStr)).map(f => `/screenshots/${f}`);
+                return { ...l, id: l._id, screenshots };
+            }));
         } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
@@ -256,8 +266,19 @@ module.exports = function(authenticateToken, io) {
             if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
             const user = await User.findOne({ email: req.user.email });
             if (!user) return res.status(404).json({ detail: "User not found" });
-            const logs = await AutomationLog.find({ user_id: user._id }).sort({ started_at: -1 }).limit(50).lean();
-            res.json(logs.map(l => ({ ...l, id: l._id })));
+
+            const screenshotsDir = path.join(__dirname, '..', 'screenshots');
+            let allScreenshots = [];
+            try {
+                if (fs.existsSync(screenshotsDir)) allScreenshots = fs.readdirSync(screenshotsDir);
+            } catch (e) {}
+
+            const logs = await AutomationLog.find({ user_id: user._id, status: { $ne: 'cancelled' } }).sort({ started_at: -1 }).limit(50).lean();
+            res.json(logs.map(l => {
+                const pidStr = `_${l.pid}_`;
+                const screenshots = allScreenshots.filter(f => f.includes(pidStr)).map(f => `/screenshots/${f}`);
+                return { ...l, id: l._id, screenshots };
+            }));
         } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
@@ -274,9 +295,11 @@ module.exports = function(authenticateToken, io) {
                     result.push({
                         schedule_id: logId,
                         pid: p.process?.pid,
+                        user_name: p.meetingName,
                         meeting_name: p.meetingName,
                         url: p.url,
-                        started_at: p.startedAt
+                        started_at: p.startedAt,
+                        current_step: p.currentStep ?? 0
                     });
                 }
             }
@@ -284,17 +307,16 @@ module.exports = function(authenticateToken, io) {
         } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
-    router.post('/automations/active/:id/leave', authenticateToken, (req, res) => {
+    router.post('/automations/active/:id/leave', authenticateToken, async (req, res) => {
         const id = req.params.id;
+        // Try both string key (for manual_... IDs) and any other formats
         const processInfo = activeProcesses[id];
         if (!processInfo) {
             return res.status(404).json({ error: "Process not found", active_ids: Object.keys(activeProcesses) });
         }
         
-        const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.process?.pid}.txt`);
-        processInfo.leaveRequested = true;
         try {
-            fs.writeFileSync(cmdFile, "LEAVE");
+            await cancelAutomation(id);
             res.json({ message: "Leave command sent successfully" });
         } catch (e) {
             res.status(500).json({ error: e.message });
@@ -308,20 +330,15 @@ module.exports = function(authenticateToken, io) {
             return res.status(404).json({ error: "Process not found" });
         }
         
-        const timestamp = Date.now();
-        const pid = processInfo.process?.pid;
-        const filename = `screenshot_${pid}_${timestamp}.png`;
-        const filepath = path.join(__dirname, '..', 'screenshots', filename);
-        const cmdFile = path.join(__dirname, '..', `cmd_${pid}.txt`);
-        
         const screenshotsDir = path.join(__dirname, '..', 'screenshots');
-        if (!fs.existsSync(screenshotsDir)) {
-            fs.mkdirSync(screenshotsDir, { recursive: true });
-        }
 
         try {
-            fs.writeFileSync(cmdFile, `SCREENSHOT ${filepath}`);
-            
+            const result = await takeScreenshot(id, screenshotsDir);
+            if (!result) return res.status(404).json({ error: "Process not found" });
+
+            const { filename, filepath } = result;
+
+            // Wait up to 15 seconds for the screenshot file to be written by Python
             let attempts = 0;
             let responded = false;
             const checkInterval = setInterval(() => {
@@ -330,16 +347,69 @@ module.exports = function(authenticateToken, io) {
                     responded = true;
                     clearInterval(checkInterval);
                     res.json({ url: `/screenshots/${filename}` });
-                } else if (attempts >= 30) { 
+                } else if (attempts >= 30) {
                     responded = true;
                     clearInterval(checkInterval);
-                    res.status(408).json({ error: "Screenshot timeout" });
+                    res.status(504).json({ error: "Screenshot timeout — Selenium may be busy or not in meeting" });
                 }
                 attempts++;
             }, 500);
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
+    });
+
+    // ---- SETTINGS/TEMPLATE ----
+    router.get('/settings/template', async (req, res) => {
+        try {
+            const Setting = require('../models/Setting');
+            const rows = await Setting.find({ key: { $in: ['template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time', 'whatsapp_start_time', 'whatsapp_end_time'] } });
+            const settings = {
+                template_url: '',
+                template_start_day: 'Monday',
+                template_end_day: 'Friday',
+                template_start_time: '09:30',
+                template_end_time: '12:40',
+                whatsapp_start_time: '09:00',
+                whatsapp_end_time: '18:00'
+            };
+            rows.forEach(r => settings[r.key] = r.value);
+            res.json(settings);
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.post('/settings/template', authenticateToken, async (req, res) => {
+        try {
+            if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+            const user = await User.findOne({ email: req.user.email });
+            if (!user) return res.status(404).json({ detail: "User not found" });
+            if (user.can_edit_template !== 1 && user.role !== 'admin') {
+                return res.status(403).json({ detail: "Forbidden" });
+            }
+
+            const Setting = require('../models/Setting');
+            const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time } = req.body;
+
+            const upsert = async (key, val) => {
+                if (val !== undefined) await Setting.findOneAndUpdate({ key }, { value: val }, { upsert: true, new: true });
+            };
+
+            await upsert('template_url', url);
+            await upsert('template_start_day', start_day);
+            await upsert('template_end_day', end_day);
+            await upsert('template_start_time', start_time);
+            await upsert('template_end_time', end_time);
+            await upsert('whatsapp_start_time', whatsapp_start_time);
+            await upsert('whatsapp_end_time', whatsapp_end_time);
+
+            // Apply template changes
+            if (url !== undefined || start_time !== undefined || end_time !== undefined || start_day !== undefined || end_day !== undefined) {
+                const { applyTemplateForAllDays } = require('../services/templateService');
+                await applyTemplateForAllDays();
+            }
+
+            res.json({ message: "Template settings updated successfully" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
     return router;
