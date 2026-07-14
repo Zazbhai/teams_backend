@@ -28,14 +28,43 @@ function scheduleMeetingJob(scheduleId, startTime, endTime, day, url, teamName, 
         let finalUrl = url;
         if (!finalUrl || finalUrl.trim() === '') {
             const setting = await Setting.findOne({ key: 'template_url' });
-            if (setting && setting.value) finalUrl = setting.value;
+            if (setting && setting.value) {
+                const todayIST = getTodayIST();
+                const updatedAt = new Date(setting.updatedAt);
+                const updatedIST = new Date(updatedAt.getTime() + (5.5 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+                if (updatedIST === todayIST) {
+                    finalUrl = setting.value;
+                } else {
+                    console.log(`[Scheduler] Existing template_url is from a previous day. Waiting for today's link...`);
+                }
+            }
+        }
+
+        // Wait up to 30 mins for WhatsApp bot if meeting is 'Premade Template' or URL is empty
+        let waitedMinutes = 0;
+        while ((!finalUrl || finalUrl.trim() === '') && waitedMinutes < 30) {
+            console.log(`[Scheduler] No link found for ${meetingName}. Waiting ${waitedMinutes + 1}/30 minutes...`);
+            await new Promise(resolve => setTimeout(resolve, 60 * 1000));
+            waitedMinutes++;
+            
+            const setting = await Setting.findOne({ key: 'template_url' });
+            if (setting && setting.value) {
+                // Verify the link was updated today
+                const todayIST = getTodayIST();
+                const updatedAt = new Date(setting.updatedAt);
+                const updatedIST = new Date(updatedAt.getTime() + (5.5 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+                if (updatedIST === todayIST) {
+                    finalUrl = setting.value;
+                    break;
+                }
+            }
         }
 
         if (!finalUrl || finalUrl.trim() === '') {
             const now = new Date().toISOString();
             await AutomationLog.create({
                 schedule_id: scheduleId, user_id: userId || null, user_name: teamName || 'AutoPilot Team',
-                meeting_name: meetingName || '', url: '', status: 'skipped', started_at: now, ended_at: now
+                meeting_name: meetingName || '', url: '', status: 'skipped (no link after 30 mins)', started_at: now, ended_at: now
             });
             return;
         }

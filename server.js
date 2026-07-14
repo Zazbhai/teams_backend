@@ -26,6 +26,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/teams_aut
     .then(() => {
         console.log('Connected to MongoDB');
         loadJobsFromDb();
+        setupWhatsAppBot(applyTemplateForAllDays);
     })
     .catch(err => console.error('MongoDB connection error:', err));
 

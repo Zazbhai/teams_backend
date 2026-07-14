@@ -1,9 +1,10 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const Setting = require('./models/Setting');
 
 let client = null;
 
-function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
+function setupWhatsAppBot(applyTemplateForTodayCallback) {
     if (client) {
         return;
     }
@@ -34,7 +35,7 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
             console.log(`[WhatsApp Debug] Received message in "${chat.name}" (isGroup: ${chat.isGroup}): ${message.body}`);
 
             if (chat.isGroup) {
-                const groupNameRow = db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_group_name'").get();
+                const groupNameRow = await Setting.findOne({ key: 'whatsapp_group_name' });
                 let targetGroupName = groupNameRow ? groupNameRow.value : (process.env.WHATSAPP_GROUP_NAME || '');
                 
                 // Normalize whitespaces (like newlines) to a single space before comparing
@@ -63,8 +64,11 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                     console.log(`[WhatsApp] Found meeting link in group "${chat.name}": ${meetingUrl}`);
                     
                     // Save to database
-                    db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?")
-                      .run('template_url', meetingUrl, meetingUrl);
+                    await Setting.findOneAndUpdate(
+                        { key: 'template_url' },
+                        { value: meetingUrl },
+                        { upsert: true }
+                    );
                     
                     // Trigger template application for today
                     if (applyTemplateForTodayCallback) {
