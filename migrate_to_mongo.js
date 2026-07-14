@@ -16,6 +16,13 @@ async function migrate() {
     const dbPath = path.join(__dirname, '..', 'scheduler.db');
     const db = new Database(dbPath, { readonly: true });
     
+    console.log('Clearing existing MongoDB collections...');
+    await User.deleteMany({});
+    await Setting.deleteMany({});
+    await SubscriptionPlan.deleteMany({});
+    await Schedule.deleteMany({});
+    await AutomationLog.deleteMany({});
+    
     console.log('Starting Migration...');
 
     // Migrate Users
