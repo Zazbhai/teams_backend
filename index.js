@@ -641,8 +641,33 @@ function applyTemplateForAllDays(targetUserId = null) {
 
 applyTemplateForAllDays();
 
+// ────────────────────────────────────────────────────────
+// Midnight Reset: clear the template URL at 00:00 IST and
+// activate the WhatsApp bot so it can pick up today's link.
+// ────────────────────────────────────────────────────────
+cron.schedule('0 0 * * *', () => {
+    console.log('[Midnight Reset] Clearing template_url for the new day...');
+
+    // 1. Wipe the stored meeting link
+    db.prepare("INSERT INTO settings (key, value) VALUES ('template_url', '') ON CONFLICT(key) DO UPDATE SET value = ''").run();
+
+    // 2. Clear the URL from every premade-template schedule so they wait
+    //    for a fresh link (they will be skipped until WhatsApp sends a new one)
+    const templateRows = db.prepare("SELECT id FROM schedules WHERE meeting_name = (SELECT value FROM settings WHERE key = 'template_meeting_name') OR meeting_name = 'Premade Template'").all();
+    templateRows.forEach(row => {
+        db.prepare("UPDATE schedules SET url = '' WHERE id = ?").run(row.id);
+    });
+
+    console.log(`[Midnight Reset] Cleared URL for ${templateRows.length} premade-template schedule(s). Waiting for WhatsApp link...`);
+
+    // 3. Ensure the WhatsApp bot is running so it receives the new link
+    setupWhatsAppBot(db, applyTemplateForAllDays);
+
+}, { timezone: 'Asia/Kolkata' });
+
+// At 00:01 IST re-apply the template (picks up whatever URL was already set,
+// or remains empty until WhatsApp delivers today's link via the bot above).
 cron.schedule('1 0 * * *', () => {
-    // applyTemplateForAllDays(); // Not strictly needed to run daily anymore since we populate all days. But keeping it as a daily sync is fine.
     applyTemplateForAllDays();
 }, { timezone: 'Asia/Kolkata' });
 
