@@ -34,81 +34,84 @@ function setupWhatsAppBot(applyTemplateForTodayCallback) {
         try {
             if (message.isStatus || message.from === 'status@broadcast') return;
 
-            console.log(`[WhatsApp Debug] New raw message from ${message.from}: ${message.body}`);
+            // Only log if it contains something that looks like a link to reduce log spam
+            if (message.body && message.body.includes('http')) {
+                console.log(`[WhatsApp Debug] New raw message from ${message.from}: ${message.body}`);
+            }
 
-            let chat;
-            try {
-                chat = await message.getChat();
-            } catch (err) {
-                console.log(`[WhatsApp Debug] getChat() failed for message from ${message.from}. Error: ${err.message}`);
-                // Ignore random puppeteer evaluate errors (like 'r: r') for system messages
+            // Check if message contains a meeting link
+            const linkRegex = /((?:https?:\/\/)?(?:teams\.microsoft\.com\/(?:l\/meetup-join|meet)\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
+            const match = message.body ? message.body.match(linkRegex) : null;
+
+            if (!match || match.length === 0) {
+                return; // Ignore messages without meeting links
+            }
+
+            const isGroup = message.from.endsWith('@g.us');
+            if (!isGroup) {
+                console.log(`[WhatsApp Debug] Ignoring link from non-group chat: ${message.from}`);
                 return;
             }
+
+            let chatName = "Unknown Group";
+            try {
+                const chat = await message.getChat();
+                chatName = chat.name;
+                console.log(`[WhatsApp Debug] Message is from group: "${chatName}"`);
+            } catch (err) {
+                console.log(`[WhatsApp Debug] getChat() failed for ${message.from}. Error: ${err.message}. Proceeding with 'Unknown Group'.`);
+            }
+
+            let targetGroupName = process.env.WHATSAPP_GROUP_NAME || '';
+            try {
+                const Setting = require('./models/Setting');
+                const groupNameRow = await Setting.findOne({ key: 'whatsapp_group_name' });
+                if (groupNameRow && groupNameRow.value) {
+                    targetGroupName = groupNameRow.value;
+                }
+            } catch (e) {
+                console.error('[WhatsApp] Error reading target group name from DB', e);
+            }
             
-            console.log(`[WhatsApp Debug] Received message in "${chat.name}" (isGroup: ${chat.isGroup}): ${message.body}`);
+            const normalize = (str) => str.replace(/\s+/g, ' ').trim().toLowerCase();
 
-            if (chat.isGroup) {
-                // Read target group from SQLite settings first, then fall back to env
-                let targetGroupName = process.env.WHATSAPP_GROUP_NAME || '';
-                try {
-                    const Setting = require('./models/Setting');
-                    const groupNameRow = await Setting.findOne({ key: 'whatsapp_group_name' });
-                    if (groupNameRow && groupNameRow.value) {
-                        targetGroupName = groupNameRow.value;
-                    }
-                } catch (e) {
-                    console.error('[WhatsApp] Error reading target group name from DB', e);
+            if (chatName !== "Unknown Group" && targetGroupName && targetGroupName.trim() !== '') {
+                if (normalize(chatName) !== normalize(targetGroupName)) {
+                    console.log(`[WhatsApp Debug] Ignoring message because group "${chatName}" doesn't match target "${targetGroupName}"`);
+                    return;
                 }
-                
-                // Normalize whitespaces (like newlines) to a single space before comparing
-                const normalize = (str) => str.replace(/\s+/g, ' ').trim().toLowerCase();
+            } else if (chatName === "Unknown Group" && targetGroupName && targetGroupName.trim() !== '') {
+                console.log(`[WhatsApp Debug] WARNING: Could not verify group name for "${message.from}" due to WhatsApp Web issue, but accepting link anyway to prevent failures.`);
+            }
 
-                // If a target group is set, ignore messages from other groups (case-insensitive & ignoring newlines).
-                if (targetGroupName && targetGroupName.trim() !== '') {
-                    if (normalize(chat.name) !== normalize(targetGroupName)) {
-                        console.log(`[WhatsApp Debug] Ignoring message because group "${chat.name}" doesn't match target "${targetGroupName}"`);
-                        return; // Not the target group
-                    }
-                }
-
-                console.log(`[WhatsApp Debug] Message is in the correct group! Checking for links...`);
-
-                // Check if message contains a meeting link (made https optional)
-                // Added support for teams.microsoft.com/meet/ format
-                const linkRegex = /((?:https?:\/\/)?(?:teams\.microsoft\.com\/(?:l\/meetup-join|meet)\/|meet\.google\.com\/|zoom\.us\/j\/)[^\s]+)/gi;
-                const match = message.body.match(linkRegex);
-
-                if (match && match.length > 0) {
-                    let meetingUrl = match[0];
-                    if (!meetingUrl.startsWith('http')) {
-                        meetingUrl = 'https://' + meetingUrl;
-                    }
-                    console.log(`[WhatsApp] Found meeting link in group "${chat.name}": ${meetingUrl}`);
-                    
-                    // Save to MongoDB database
-                    try {
-                        const Setting = require('./models/Setting');
-                        await Setting.findOneAndUpdate({ key: 'template_url' }, { value: meetingUrl }, { upsert: true });
-                        console.log(`[WhatsApp] Saved template_url to DB: ${meetingUrl}`);
-                    } catch (e) {
-                        console.error('[WhatsApp] Error saving template URL to DB', e);
-                    }
-                    
-                    // Trigger template application for today
-                    if (applyTemplateForTodayCallback) {
-                        applyTemplateForTodayCallback();
-                        console.log(`[WhatsApp] Successfully updated Premade Template with new URL.`);
-                    }
-                    
-                    // Send confirmation message
-                    const confirmNumber = process.env.WHATSAPP_CONFIRM_NUMBER || '919262231588';
-                    try {
-                        await client.sendMessage(`${confirmNumber}@c.us`, `today teams meeting link set to ${meetingUrl}`);
-                        console.log(`[WhatsApp] Sent confirmation to +${confirmNumber}`);
-                    } catch (err) {
-                        console.error(`[WhatsApp] Failed to send confirmation to +${confirmNumber}`, err);
-                    }
-                }
+            let meetingUrl = match[0];
+            if (!meetingUrl.startsWith('http')) {
+                meetingUrl = 'https://' + meetingUrl;
+            }
+            console.log(`[WhatsApp] Found meeting link from ${message.from}: ${meetingUrl}`);
+            
+            // Save to MongoDB database
+            try {
+                const Setting = require('./models/Setting');
+                await Setting.findOneAndUpdate({ key: 'template_url' }, { value: meetingUrl }, { upsert: true });
+                console.log(`[WhatsApp] Saved template_url to DB: ${meetingUrl}`);
+            } catch (e) {
+                console.error('[WhatsApp] Error saving template URL to DB', e);
+            }
+            
+            // Trigger template application for today
+            if (applyTemplateForTodayCallback) {
+                applyTemplateForTodayCallback();
+                console.log(`[WhatsApp] Successfully updated Premade Template with new URL.`);
+            }
+            
+            // Send confirmation message
+            const confirmNumber = process.env.WHATSAPP_CONFIRM_NUMBER || '919262231588';
+            try {
+                await client.sendMessage(`${confirmNumber}@c.us`, `today teams meeting link set to ${meetingUrl}`);
+                console.log(`[WhatsApp] Sent confirmation to +${confirmNumber}`);
+            } catch (err) {
+                console.error(`[WhatsApp] Failed to send confirmation to +${confirmNumber}`, err);
             }
         } catch (e) {
             console.error('[WhatsApp] Error handling message:', e);
