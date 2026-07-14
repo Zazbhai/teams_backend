@@ -230,12 +230,7 @@ function initDb() {
         // column might already exist
     }
 
-    try {
-        db.exec("ALTER TABLE automation_logs ADD COLUMN joined_date TEXT");
-        // Stores YYYY-MM-DD (IST) when status = 'completed', used for daily quota counting
-    } catch (e) {
-        // column might already exist
-    }
+
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS settings (
@@ -282,9 +277,16 @@ function initDb() {
             status TEXT DEFAULT 'running',
             started_at TEXT,
             ended_at TEXT,
-            pid INTEGER
+            pid INTEGER,
+            joined_date TEXT
         )
     `);
+
+    try {
+        db.exec("ALTER TABLE automation_logs ADD COLUMN joined_date TEXT");
+    } catch (e) {
+        // column might already exist
+    }
 
     // Add indexes for much faster fetching
     db.exec("CREATE INDEX IF NOT EXISTS idx_logs_user ON automation_logs(user_id);");
