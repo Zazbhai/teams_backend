@@ -241,6 +241,8 @@ function initDb() {
 
     db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('whatsapp_start_time', '09:00')");
     db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('whatsapp_end_time', '18:00')");
+    // How many minutes after the meeting start time to wait for a WhatsApp link before cancelling (default: 30)
+    db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('whatsapp_link_wait_mins', '30')");
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS subscription_plans (
@@ -518,14 +520,61 @@ function scheduleMeetingJob(scheduleId, startTime, endTime, day, url, teamName, 
         }
 
         if (!finalUrl || finalUrl.trim() === '') {
-            console.log(`[Scheduler] Skipping meeting ${meetingName} because URL is empty. Rescheduling for next time.`);
-            const logStmt = db.prepare(`
-                INSERT INTO automation_logs (schedule_id, user_id, user_name, meeting_name, url, status, started_at, ended_at)
-                VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?)
-            `);
-            const now = new Date().toISOString();
-            logStmt.run(scheduleId, userId || null, teamName || 'AutoPilot Team', meetingName || '', '', now, now);
-            return;
+            // ── Wait-for-link logic ──────────────────────────────────────────────
+            // Instead of skipping immediately, poll for the URL every 30 seconds
+            // up to whatsapp_link_wait_mins minutes, then cancel if still empty.
+            const waitRow = db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_link_wait_mins'").get();
+            const waitMins = parseInt((waitRow && waitRow.value) ? waitRow.value : '30', 10) || 30;
+            const pollIntervalMs = 30 * 1000; // poll every 30 s
+            const maxAttempts = Math.ceil((waitMins * 60) / 30); // total 30-s intervals
+            let attempts = 0;
+
+            console.log(`[Scheduler] URL missing for "${meetingName}". Waiting up to ${waitMins} min(s) for WhatsApp link...`);
+
+            const pollInterval = setInterval(() => {
+                attempts++;
+
+                // Re-read URL from DB (WhatsApp bot writes here)
+                const urlRow = db.prepare("SELECT value FROM settings WHERE key = 'template_url'").get();
+                const polledUrl = urlRow && urlRow.value ? urlRow.value.trim() : '';
+
+                if (polledUrl) {
+                    clearInterval(pollInterval);
+                    console.log(`[Scheduler] Got link for "${meetingName}" after ${attempts * 30}s: ${polledUrl}`);
+
+                    // Quota check before running
+                    if (userId) {
+                        const user = db.prepare("SELECT daily_meeting_limit FROM users WHERE id = ?").get(userId);
+                        const limit = (user && user.daily_meeting_limit) ? user.daily_meeting_limit : 0;
+                        if (limit > 0) {
+                            const activeCount = Object.values(activeProcesses).filter(p => p.userId === userId).length;
+                            const todayIST = getTodayIST();
+                            const todayRow = db.prepare("SELECT COUNT(*) as c FROM automation_logs WHERE user_id = ? AND joined_date = ? AND status = 'completed'").get(userId, todayIST);
+                            const joinsToday = todayRow ? todayRow.c : 0;
+                            if (joinsToday + activeCount >= limit) {
+                                console.log(`[Scheduler] Quota exceeded after link arrived for user ${userId}. Skipping id=${scheduleId}.`);
+                                const logStmt = db.prepare(`INSERT INTO automation_logs (schedule_id, user_id, user_name, meeting_name, url, status, started_at, ended_at) VALUES (?, ?, ?, ?, ?, 'skipped (quota reached)', ?, ?)`);
+                                const now = new Date().toISOString();
+                                logStmt.run(scheduleId, userId, teamName || 'AutoPilot Team', meetingName || '', '', now, now);
+                                return;
+                            }
+                        }
+                    }
+
+                    runAutomation(scheduleId, polledUrl, duration, teamName, meetingName, userId);
+                    return;
+                }
+
+                if (attempts >= maxAttempts) {
+                    clearInterval(pollInterval);
+                    console.log(`[Scheduler] No link received within ${waitMins} min(s) for "${meetingName}". Cancelling.`);
+                    const logStmt = db.prepare(`INSERT INTO automation_logs (schedule_id, user_id, user_name, meeting_name, url, status, started_at, ended_at) VALUES (?, ?, ?, ?, ?, 'skipped (no link received)', ?, ?)`);
+                    const now = new Date().toISOString();
+                    logStmt.run(scheduleId, userId || null, teamName || 'AutoPilot Team', meetingName || '', '', now, now);
+                }
+            }, pollIntervalMs);
+
+            return; // don't fall through to quota check / runAutomation
         }
 
         // Strict execution-time quota check
@@ -1126,8 +1175,8 @@ app.delete('/users/:id', (req, res) => {
 });
 
 app.get('/settings/template', (req, res) => {
-    const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time', 'whatsapp_start_time', 'whatsapp_end_time')").all();
-    const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40', whatsapp_start_time: '09:00', whatsapp_end_time: '18:00' };
+    const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('template_url', 'template_start_day', 'template_end_day', 'template_start_time', 'template_end_time', 'whatsapp_start_time', 'whatsapp_end_time', 'whatsapp_link_wait_mins')").all();
+    const settings = { template_url: '', template_start_day: 'Monday', template_end_day: 'Friday', template_start_time: '09:30', template_end_time: '12:40', whatsapp_start_time: '09:00', whatsapp_end_time: '18:00', whatsapp_link_wait_mins: '30' };
     rows.forEach(r => settings[r.key] = r.value);
     res.json(settings);
 });
@@ -1137,7 +1186,7 @@ app.post('/settings/template', (req, res) => {
     if (req.user.can_edit_template !== 1 && req.user.role !== 'admin') {
         return res.status(403).json({ detail: "Forbidden" });
     }
-    const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time } = req.body;
+    const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time, whatsapp_link_wait_mins } = req.body;
     const stmt = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?");
     if (url !== undefined) stmt.run('template_url', url, url);
     if (start_day !== undefined) stmt.run('template_start_day', start_day, start_day);
@@ -1146,6 +1195,10 @@ app.post('/settings/template', (req, res) => {
     if (end_time !== undefined) stmt.run('template_end_time', end_time, end_time);
     if (whatsapp_start_time !== undefined) stmt.run('whatsapp_start_time', whatsapp_start_time, whatsapp_start_time);
     if (whatsapp_end_time !== undefined) stmt.run('whatsapp_end_time', whatsapp_end_time, whatsapp_end_time);
+    if (whatsapp_link_wait_mins !== undefined) {
+        const mins = Math.max(1, parseInt(whatsapp_link_wait_mins, 10) || 30);
+        stmt.run('whatsapp_link_wait_mins', String(mins), String(mins));
+    }
 
     // If template settings changed, apply template for today
     if (url !== undefined || start_time !== undefined || end_time !== undefined || start_day !== undefined || end_day !== undefined) {
