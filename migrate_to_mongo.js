@@ -13,7 +13,7 @@ async function migrate() {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/teams_automation');
     console.log('Connected to MongoDB.');
 
-    const dbPath = path.join(__dirname, 'scheduler.db');
+    const dbPath = path.join(__dirname, '..', 'scheduler.db');
     const db = new Database(dbPath, { readonly: true });
     
     console.log('Starting Migration...');
