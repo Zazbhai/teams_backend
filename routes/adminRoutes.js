@@ -122,7 +122,7 @@ module.exports = function(authenticateToken, io) {
             for (let p of plans) {
                 const now = new Date().toISOString();
                 p.active_users = await User.countDocuments({ 
-                    plan_id: p._id, 
+                    plan_id: p._id.toString(), 
                     has_subscription: 1,
                     $or: [
                         { subscription_end_date: null },

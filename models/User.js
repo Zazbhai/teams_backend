@@ -12,7 +12,7 @@ const userSchema = new mongoose.Schema({
   template_team_name: { type: String, default: 'Template' },
   template_meeting_name: { type: String, default: 'Premade Template' },
   auto_template_enabled: { type: Number, default: 0 },
-  plan_id: { type: Number }, // We'll keep it simple for now, maybe map to string or Number
+  plan_id: { type: String }, // We'll keep it simple for now, map to string
   subscription_start_date: { type: String },
   subscription_end_date: { type: String },
   whatsapp_number: { type: String },
