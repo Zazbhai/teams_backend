@@ -136,6 +136,31 @@ cron.schedule('* * * * *', async () => {
     }
 }, { timezone: 'Asia/Kolkata' });
 
+// ---- Midnight Reset: clear the template URL at 00:00 IST ----
+cron.schedule('0 0 * * *', async () => {
+    try {
+        console.log('[Midnight Reset] Clearing template_url for the new day...');
+        const Setting = require('./models/Setting');
+        const Schedule = require('./models/Schedule');
+
+        // 1. Wipe the stored meeting link
+        await Setting.findOneAndUpdate({ key: 'template_url' }, { value: '' }, { upsert: true });
+
+        // 2. Clear the URL from every premade-template schedule
+        const settingName = await Setting.findOne({ key: 'template_meeting_name' });
+        const matchName = settingName && settingName.value ? settingName.value : 'Premade Template';
+        
+        const res = await Schedule.updateMany(
+            { $or: [{ meeting_name: matchName }, { meeting_name: 'Premade Template' }] },
+            { $set: { url: '' } }
+        );
+
+        console.log(`[Midnight Reset] Cleared URL for ${res.modifiedCount} premade-template schedule(s). Waiting for WhatsApp link...`);
+    } catch (e) {
+        console.error('[Midnight Reset] Error:', e.message);
+    }
+}, { timezone: 'Asia/Kolkata' });
+
 // ---- Daily template re-apply at midnight ----
 cron.schedule('1 0 * * *', async () => {
     try {

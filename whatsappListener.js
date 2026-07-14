@@ -2,16 +2,11 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
 let client = null;
-let _db = null; // SQLite db reference, set via setupWhatsAppBot
 
 /**
- * @param {import('better-sqlite3').Database} db - SQLite database instance
  * @param {Function} applyTemplateForTodayCallback - called after URL is saved
  */
-function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
-    // Store db reference for later use (e.g. saving template_url)
-    if (db) _db = db;
-
+function setupWhatsAppBot(applyTemplateForTodayCallback) {
     if (client) {
         return;
     }
@@ -52,11 +47,14 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
             if (chat.isGroup) {
                 // Read target group from SQLite settings first, then fall back to env
                 let targetGroupName = process.env.WHATSAPP_GROUP_NAME || '';
-                if (_db) {
-                    const groupNameRow = _db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_group_name'").get();
+                try {
+                    const Setting = require('./models/Setting');
+                    const groupNameRow = await Setting.findOne({ key: 'whatsapp_group_name' });
                     if (groupNameRow && groupNameRow.value) {
                         targetGroupName = groupNameRow.value;
                     }
+                } catch (e) {
+                    console.error('[WhatsApp] Error reading target group name from DB', e);
                 }
                 
                 // Normalize whitespaces (like newlines) to a single space before comparing
@@ -84,10 +82,13 @@ function setupWhatsAppBot(db, applyTemplateForTodayCallback) {
                     }
                     console.log(`[WhatsApp] Found meeting link in group "${chat.name}": ${meetingUrl}`);
                     
-                    // Save to SQLite database
-                    if (_db) {
-                        _db.prepare("INSERT INTO settings (key, value) VALUES ('template_url', ?) ON CONFLICT(key) DO UPDATE SET value = ?").run(meetingUrl, meetingUrl);
-                        console.log(`[WhatsApp] Saved template_url to SQLite: ${meetingUrl}`);
+                    // Save to MongoDB database
+                    try {
+                        const Setting = require('./models/Setting');
+                        await Setting.findOneAndUpdate({ key: 'template_url' }, { value: meetingUrl }, { upsert: true });
+                        console.log(`[WhatsApp] Saved template_url to DB: ${meetingUrl}`);
+                    } catch (e) {
+                        console.error('[WhatsApp] Error saving template URL to DB', e);
                     }
                     
                     // Trigger template application for today
