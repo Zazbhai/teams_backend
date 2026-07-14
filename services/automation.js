@@ -61,7 +61,8 @@ async function runAutomation(scheduleId, url, duration, teamName, meetingName, u
         autojoinPath,
         '--url', url,
         '--name', displayName,
-        '--duration', duration.toString()
+        '--duration', duration.toString(),
+        '--headless'
     ]);
 
     activeProcesses[logId] = { process: pythonProcess, userId, scheduleId };
