@@ -56,11 +56,24 @@ module.exports = function(authenticateToken, io) {
                 subscription_end_date: user.subscription_end_date || null,
                 plan_name: planName,
                 role: user.role,
+                is_admin: user.is_admin,
                 can_edit_template: user.can_edit_template === 1,
                 auto_template_enabled: user.auto_template_enabled === 1,
                 template_team_name: user.template_team_name || 'Template',
                 template_meeting_name: user.template_meeting_name || 'Premade Template'
             });
+        } catch (e) {
+            res.status(500).json({ detail: e.message });
+        }
+    });
+
+    router.get('/users/me', authenticateToken, async (req, res) => {
+        try {
+            const email = req.user.email;
+            if (!email) return res.status(400).json({ detail: "No email in token" });
+            const user = await User.findOne({ email });
+            if (!user) return res.status(404).json({ detail: "User not found" });
+            res.json(user);
         } catch (e) {
             res.status(500).json({ detail: e.message });
         }
