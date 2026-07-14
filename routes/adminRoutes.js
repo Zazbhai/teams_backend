@@ -144,6 +144,7 @@ module.exports = function(authenticateToken, io) {
             const plan = await SubscriptionPlan.create({ name, price, description, duration_days: duration });
             res.json({ status: "success", id: plan._id });
         } catch (e) {
+            console.error('[Add Subscription Error]', e);
             res.status(500).json({ detail: e.message });
         }
     });
