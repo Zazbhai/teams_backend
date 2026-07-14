@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const automationLogSchema = new mongoose.Schema({
-  schedule_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Schedule' },
+  schedule_id: { type: mongoose.Schema.Types.Mixed }, // Can be ObjectId or string (for manual/test runs)
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   user_name: { type: String },
   meeting_name: { type: String },
