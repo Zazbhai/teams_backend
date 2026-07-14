@@ -147,5 +147,7 @@ async function checkSchedules() {
 module.exports = {
     checkSchedules,
     cancelAutomation,
-    activeProcesses
+    activeProcesses,
+    runAutomation,
+    checkDailyQuota
 };

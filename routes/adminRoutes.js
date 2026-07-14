@@ -4,144 +4,55 @@ const User = require('../models/User');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
 const AutomationLog = require('../models/AutomationLog');
 const Schedule = require('../models/Schedule');
+const { activeProcesses, runAutomation, checkDailyQuota } = require('../services/automation');
 
 module.exports = function(authenticateToken, io) {
-    function getTodayIST() {
-        const now = new Date();
-        const istOffset = 5.5 * 60 * 60 * 1000;
-        const istDate = new Date(now.getTime() + istOffset);
-        return istDate.toISOString().slice(0, 10);
-    }
 
-    // Admin Routes
-    router.get('/stats', authenticateToken, async (req, res) => {
+    // ---- STATS ----
+    router.get('/stats', async (req, res) => {
         try {
             const total_users = await User.countDocuments();
             const pro_users = await User.countDocuments({ has_subscription: 1 });
             const total_schedules = await Schedule.countDocuments();
             const mrr = pro_users * 29;
-
             res.json({
                 total_users, pro_users, total_schedules, mrr,
                 success_rate: 100.0,
                 trends: { users: "+2.4%", mrr: "+0.0%", schedules: "+1.1%" }
             });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
+        } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
-    router.get('/users/recent', authenticateToken, async (req, res) => {
+    router.get('/users/recent', async (req, res) => {
         try {
-            const users = await User.find().sort({ _id: -1 }).limit(5).select('name email has_subscription subscription_end_date role can_edit_template daily_meeting_limit');
-            res.json(users);
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
+            const users = await User.find().sort({ _id: -1 }).limit(5)
+                .select('name email has_subscription subscription_end_date role can_edit_template daily_meeting_limit').lean();
+            res.json(users.map(u => ({ ...u, id: u._id })));
+        } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
-    router.get('/users', authenticateToken, async (req, res) => {
-        try {
-            const users = await User.find().select('name email has_subscription subscription_end_date role can_edit_template daily_meeting_limit');
-            res.json(users);
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
-    });
-
-    router.get('/users/stats', authenticateToken, async (req, res) => {
-        try {
-            const todayIST = getTodayIST();
-            const users = await User.find().sort({ _id: -1 }).lean();
-            const result = [];
-            for (const u of users) {
-                const total = await AutomationLog.countDocuments({ user_id: u._id });
-                const success = await AutomationLog.countDocuments({ user_id: u._id, status: 'completed' });
-                const failed = await AutomationLog.countDocuments({ user_id: u._id, status: 'failed' });
-                const today = await AutomationLog.countDocuments({ user_id: u._id, joined_date: todayIST });
-                
-                result.push({
-                    id: u._id, name: u.name, email: u.email, has_subscription: u.has_subscription,
-                    subscription_end_date: u.subscription_end_date, role: u.role, can_edit_template: u.can_edit_template,
-                    daily_meeting_limit: u.daily_meeting_limit,
-                    total_meetings: total, successful_meetings: success, failed_meetings: failed, today_meetings: today
-                });
-            }
-            res.json(result);
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
-    });
-
-    router.put('/users/:id/role', authenticateToken, async (req, res) => {
-        try {
-            const user = await User.findById(req.params.id);
-            if (!user) return res.status(404).json({ detail: "Not found" });
-            user.role = req.body.role;
-            user.is_admin = req.body.role === 'admin' ? 1 : 0;
-            await user.save();
-            res.json({ message: "Role updated" });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
-    });
-
-    router.put('/users/:id/subscription', authenticateToken, async (req, res) => {
-        try {
-            const user = await User.findById(req.params.id);
-            if (!user) return res.status(404).json({ detail: "Not found" });
-            user.has_subscription = req.body.has_subscription ? 1 : 0;
-            if (req.body.has_subscription) {
-                const endDate = new Date();
-                endDate.setDate(endDate.getDate() + 30);
-                user.subscription_end_date = endDate.toISOString();
-            } else {
-                user.subscription_end_date = null;
-            }
-            await user.save();
-            res.json({ message: "Subscription updated" });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
-    });
-
-    router.delete('/users/:id', authenticateToken, async (req, res) => {
-        try {
-            await User.findByIdAndDelete(req.params.id);
-            await Schedule.deleteMany({ user_id: req.params.id });
-            await AutomationLog.deleteMany({ user_id: req.params.id });
-            res.json({ message: "Deleted" });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
-    });
-
+    // ---- SUBSCRIPTION PLANS ----
     router.get('/api/subscriptions', async (req, res) => {
         try {
             const plans = await SubscriptionPlan.find().lean();
             for (let p of plans) {
                 const now = new Date().toISOString();
-                p.active_users = await User.countDocuments({ 
-                    plan_id: p._id.toString(), 
+                p.active_users = await User.countDocuments({
+                    plan_id: p._id.toString(),
                     has_subscription: 1,
-                    $or: [
-                        { subscription_end_date: null },
-                        { subscription_end_date: { $gt: now } }
-                    ]
+                    $or: [{ subscription_end_date: null }, { subscription_end_date: { $gt: now } }]
                 });
                 p.id = p._id;
             }
             res.json({ plans });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
+        } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
     router.post('/api/subscriptions', async (req, res) => {
         try {
             const { name, price, description, duration_days } = req.body;
             const duration = duration_days ? parseInt(duration_days) : 30;
-            const plan = await SubscriptionPlan.create({ name, price, description, duration_days: duration });
+            const plan = await SubscriptionPlan.create({ name, price: price || '₹0/mo', description, duration_days: duration });
             res.json({ status: "success", id: plan._id });
         } catch (e) {
             console.error('[Add Subscription Error]', e);
@@ -155,18 +66,220 @@ module.exports = function(authenticateToken, io) {
             const duration = duration_days ? parseInt(duration_days) : 30;
             await SubscriptionPlan.findByIdAndUpdate(req.params.id, { name, price, description, duration_days: duration });
             res.json({ status: "success" });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
+        } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
     router.delete('/api/subscriptions/:id', async (req, res) => {
         try {
             await SubscriptionPlan.findByIdAndDelete(req.params.id);
             res.json({ status: "success" });
-        } catch (e) {
-            res.status(500).json({ detail: e.message });
-        }
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    // ---- USER MANAGEMENT ----
+    router.put('/users/:id/subscription', authenticateToken, async (req, res) => {
+        try {
+            const active = req.query?.active === 'true' || req.body?.active === true;
+            const planId = req.body?.plan_id || null;
+            let endDate = null;
+            let actualPlanId = planId;
+
+            if (active) {
+                let duration = 30;
+                if (planId) {
+                    const plan = await SubscriptionPlan.findById(planId);
+                    if (plan && plan.duration_days) duration = plan.duration_days;
+                }
+                const date = new Date();
+                date.setDate(date.getDate() + duration);
+                endDate = date.toISOString();
+            } else {
+                actualPlanId = null;
+            }
+
+            await User.findByIdAndUpdate(req.params.id, {
+                has_subscription: active ? 1 : 0,
+                subscription_end_date: endDate,
+                plan_id: actualPlanId
+            });
+            res.json({ message: "Subscription updated", subscription_end_date: endDate, plan_id: actualPlanId });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.delete('/users/:id', authenticateToken, async (req, res) => {
+        try {
+            await User.findByIdAndDelete(req.params.id);
+            await Schedule.deleteMany({ user_id: req.params.id });
+            await AutomationLog.deleteMany({ user_id: req.params.id });
+            res.json({ message: "Deleted" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.put('/users/:id/role', authenticateToken, async (req, res) => {
+        try {
+            const role = req.query?.role || req.body?.role;
+            const u = await User.findById(req.params.id);
+            if (!u) return res.status(404).json({ detail: "Not found" });
+            u.role = role;
+            u.is_admin = role === 'admin' ? 1 : 0;
+            await u.save();
+            res.json({ message: "Role updated" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.put('/users/:id/template_permission', authenticateToken, async (req, res) => {
+        try {
+            const can_edit = req.body.can_edit ? 1 : 0;
+            await User.findByIdAndUpdate(req.params.id, { can_edit_template: can_edit });
+            res.json({ message: "Template permission updated" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.put('/users/:id/details', authenticateToken, async (req, res) => {
+        try {
+            const { name, email, password } = req.body;
+            await User.findByIdAndUpdate(req.params.id, { name, email, ...(password ? { password } : {}) });
+            res.json({ message: "User details updated" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.put('/users/:id/daily_limit', authenticateToken, async (req, res) => {
+        try {
+            const limit = parseInt(req.body.daily_limit);
+            if (isNaN(limit) || limit < 0) return res.status(400).json({ detail: "daily_limit must be a non-negative integer" });
+            await User.findByIdAndUpdate(req.params.id, { daily_meeting_limit: limit });
+            res.json({ message: "Daily limit updated", daily_meeting_limit: limit });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.post('/users/me/subscribe', authenticateToken, async (req, res) => {
+        try {
+            if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+            await User.findOneAndUpdate({ email: req.user.email }, { has_subscription: 1 });
+            res.json({ message: "Subscription successful" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.post('/users/:id/subscribe', async (req, res) => {
+        try {
+            await User.findByIdAndUpdate(req.params.id, { has_subscription: 1 });
+            res.json({ message: "Subscription successful" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    // ---- QUOTAS ----
+    router.get('/users/me/quota', authenticateToken, async (req, res) => {
+        try {
+            if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+            const user = await User.findOne({ email: req.user.email });
+            if (!user) return res.status(404).json({ detail: "User not found" });
+            const quota = await checkDailyQuota(user._id);
+            res.json(quota);
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    // ---- START AUTOMATION IMMEDIATELY ----
+    router.post('/automations/start', authenticateToken, async (req, res) => {
+        try {
+            if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+            const user = await User.findOne({ email: req.user.email });
+            if (!user) return res.status(404).json({ detail: "User not found" });
+
+            if (user.has_subscription !== 1) {
+                return res.status(403).json({ detail: "Subscription required", expired: true });
+            }
+            if (user.subscription_end_date && new Date(user.subscription_end_date) < new Date()) {
+                return res.status(403).json({ detail: "Plan expired. Please renew.", expired: true });
+            }
+
+            const { team_name, meeting_name, url, duration } = req.body;
+            if (!url) return res.status(400).json({ detail: "URL is required" });
+
+            const quota = await checkDailyQuota(user._id);
+            if (!quota.allowed) {
+                return res.status(429).json({
+                    detail: `Daily meeting limit reached (${quota.joins_today} joined + ${quota.active_count} active = ${quota.limit} limit). Try again tomorrow.`,
+                    quota_exceeded: true, quota
+                });
+            }
+
+            const userName = user.name || 'AutoPilot User';
+            const mins = parseInt(duration) || 60;
+            const tempId = `manual_${Date.now()}_${user._id}`;
+
+            await runAutomation(tempId, url, mins, team_name || userName, meeting_name || 'Ad-Hoc Meeting', user._id);
+            res.json({ message: "Started immediately" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.post('/automations/run-now', async (req, res) => {
+        try {
+            const { url, name, duration } = req.body;
+            if (!url) return res.status(400).json({ error: 'url is required' });
+            const displayName = name || 'Test User';
+            const mins = parseInt(duration) || 5;
+            const tempId = `test_${Date.now()}`;
+            await runAutomation(tempId, url, mins, displayName, 'Manual Test', null);
+            res.json({ message: "Started test automation" });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    // ---- SCHEDULES RUN NOW ----
+    router.post('/schedules/:id/run-now', async (req, res) => {
+        try {
+            const schedule = await Schedule.findById(req.params.id).lean();
+            if (!schedule) return res.status(404).json({ error: 'Schedule not found' });
+
+            const [startH, startM] = schedule.start_time.split(':').map(Number);
+            const [endH, endM] = schedule.end_time.split(':').map(Number);
+            let duration = (endH * 60 + endM) - (startH * 60 + startM);
+            if (duration <= 0) duration = 60;
+
+            await runAutomation(schedule._id, schedule.url, duration, schedule.team_name, schedule.meeting_name, schedule.user_id);
+            res.json({ message: `Started automation for "${schedule.meeting_name}" immediately` });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    // ---- AUTOMATION LOGS ----
+    router.get('/automations/logs', authenticateToken, async (req, res) => {
+        try {
+            const limit = parseInt(req.query.limit) || 50;
+            const logs = await AutomationLog.find().sort({ started_at: -1 }).limit(limit).lean();
+            res.json(logs.map(l => ({ ...l, id: l._id })));
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.get('/automations/logs/my', authenticateToken, async (req, res) => {
+        try {
+            if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+            const user = await User.findOne({ email: req.user.email });
+            if (!user) return res.status(404).json({ detail: "User not found" });
+            const logs = await AutomationLog.find({ user_id: user._id }).sort({ started_at: -1 }).limit(50).lean();
+            res.json(logs.map(l => ({ ...l, id: l._id })));
+        } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    // ---- ACTIVE AUTOMATIONS ----
+    router.get('/automations/active', authenticateToken, async (req, res) => {
+        try {
+            if (!req.user) return res.status(401).json({ detail: "Unauthorized" });
+            const user = await User.findOne({ email: req.user.email });
+            if (!user) return res.status(404).json({ detail: "User not found" });
+
+            const result = [];
+            for (const [logId, p] of Object.entries(activeProcesses)) {
+                if (String(p.userId) === String(user._id)) {
+                    result.push({
+                        schedule_id: logId,
+                        pid: p.process?.pid,
+                        meeting_name: p.meetingName,
+                        url: p.url,
+                        started_at: p.startedAt
+                    });
+                }
+            }
+            res.json({ count: result.length, instances: result });
+        } catch (e) { res.status(500).json({ detail: e.message }); }
     });
 
     return router;
