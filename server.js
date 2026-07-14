@@ -66,6 +66,7 @@ app.use(require('./routes/users')(authenticateToken, io));
 app.use(require('./routes/settings')(authenticateToken, io));
 app.use(require('./routes/schedules')(authenticateToken, io));
 app.use(require('./routes/automations')(authenticateToken, io));
+app.use(require('./routes/adminRoutes')(authenticateToken, io));
 
 // Template trigger
 app.post('/settings/template', authenticateToken, async (req, res) => {
