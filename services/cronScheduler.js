@@ -40,10 +40,16 @@ function scheduleMeetingJob(scheduleId, startTime, endTime, day, url, teamName, 
             }
         }
 
-        // Wait up to 30 mins for WhatsApp bot if meeting is 'Premade Template' or URL is empty
+        let maxWaitMins = 30;
+        const waitSetting = await Setting.findOne({ key: 'whatsapp_link_wait_mins' });
+        if (waitSetting && waitSetting.value) {
+            maxWaitMins = parseInt(waitSetting.value, 10) || 30;
+        }
+
+        // Wait up to maxWaitMins for WhatsApp bot if meeting is 'Premade Template' or URL is empty
         let waitedMinutes = 0;
-        while ((!finalUrl || finalUrl.trim() === '') && waitedMinutes < 30) {
-            console.log(`[Scheduler] No link found for ${meetingName}. Waiting ${waitedMinutes + 1}/30 minutes...`);
+        while ((!finalUrl || finalUrl.trim() === '') && waitedMinutes < maxWaitMins) {
+            console.log(`[Scheduler] No link found for ${meetingName}. Waiting ${waitedMinutes + 1}/${maxWaitMins} minutes...`);
             await new Promise(resolve => setTimeout(resolve, 60 * 1000));
             waitedMinutes++;
             
@@ -64,7 +70,7 @@ function scheduleMeetingJob(scheduleId, startTime, endTime, day, url, teamName, 
             const now = new Date().toISOString();
             await AutomationLog.create({
                 schedule_id: scheduleId, user_id: userId || null, user_name: teamName || 'AutoPilot Team',
-                meeting_name: meetingName || '', url: '', status: 'skipped (no link after 30 mins)', started_at: now, ended_at: now
+                meeting_name: meetingName || '', url: '', status: `skipped (no link after ${maxWaitMins} mins)`, started_at: now, ended_at: now
             });
             return;
         }

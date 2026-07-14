@@ -388,7 +388,7 @@ module.exports = function(authenticateToken, io) {
             }
 
             const Setting = require('../models/Setting');
-            const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time } = req.body;
+            const { url, start_day, end_day, start_time, end_time, whatsapp_start_time, whatsapp_end_time, whatsapp_link_wait_mins } = req.body;
 
             const upsert = async (key, val) => {
                 if (val !== undefined) await Setting.findOneAndUpdate({ key }, { value: val }, { upsert: true, returnDocument: 'after' });
@@ -401,6 +401,11 @@ module.exports = function(authenticateToken, io) {
             await upsert('template_end_time', end_time);
             await upsert('whatsapp_start_time', whatsapp_start_time);
             await upsert('whatsapp_end_time', whatsapp_end_time);
+            
+            if (whatsapp_link_wait_mins !== undefined) {
+                const mins = Math.max(1, parseInt(whatsapp_link_wait_mins, 10) || 30);
+                await upsert('whatsapp_link_wait_mins', mins);
+            }
 
             // Apply template changes
             if (url !== undefined || start_time !== undefined || end_time !== undefined || start_day !== undefined || end_day !== undefined) {
