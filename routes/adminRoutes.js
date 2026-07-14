@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const router = express.Router();
 const User = require('../models/User');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
@@ -280,6 +282,64 @@ module.exports = function(authenticateToken, io) {
             }
             res.json({ count: result.length, instances: result });
         } catch (e) { res.status(500).json({ detail: e.message }); }
+    });
+
+    router.post('/automations/active/:id/leave', authenticateToken, (req, res) => {
+        const id = req.params.id;
+        const processInfo = activeProcesses[id];
+        if (!processInfo) {
+            return res.status(404).json({ error: "Process not found", active_ids: Object.keys(activeProcesses) });
+        }
+        
+        const cmdFile = path.join(__dirname, '..', `cmd_${processInfo.process?.pid}.txt`);
+        processInfo.leaveRequested = true;
+        try {
+            fs.writeFileSync(cmdFile, "LEAVE");
+            res.json({ message: "Leave command sent successfully" });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    router.post('/automations/active/:id/screenshot', authenticateToken, async (req, res) => {
+        const id = req.params.id;
+        const processInfo = activeProcesses[id];
+        if (!processInfo) {
+            return res.status(404).json({ error: "Process not found" });
+        }
+        
+        const timestamp = Date.now();
+        const pid = processInfo.process?.pid;
+        const filename = `screenshot_${pid}_${timestamp}.png`;
+        const filepath = path.join(__dirname, '..', 'screenshots', filename);
+        const cmdFile = path.join(__dirname, '..', `cmd_${pid}.txt`);
+        
+        const screenshotsDir = path.join(__dirname, '..', 'screenshots');
+        if (!fs.existsSync(screenshotsDir)) {
+            fs.mkdirSync(screenshotsDir, { recursive: true });
+        }
+
+        try {
+            fs.writeFileSync(cmdFile, `SCREENSHOT ${filepath}`);
+            
+            let attempts = 0;
+            let responded = false;
+            const checkInterval = setInterval(() => {
+                if (responded) return;
+                if (fs.existsSync(filepath)) {
+                    responded = true;
+                    clearInterval(checkInterval);
+                    res.json({ url: `/screenshots/${filename}` });
+                } else if (attempts >= 30) { 
+                    responded = true;
+                    clearInterval(checkInterval);
+                    res.status(408).json({ error: "Screenshot timeout" });
+                }
+                attempts++;
+            }, 500);
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
     });
 
     return router;

@@ -65,7 +65,7 @@ async function runAutomation(scheduleId, url, duration, teamName, meetingName, u
         '--headless'
     ]);
 
-    activeProcesses[logId] = { process: pythonProcess, userId, scheduleId };
+    activeProcesses[logId] = { process: pythonProcess, userId, scheduleId, meetingName, url, startedAt };
 
     await AutomationLog.findByIdAndUpdate(logId, { pid: pythonProcess.pid });
 
